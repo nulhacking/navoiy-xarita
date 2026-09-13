@@ -27,6 +27,7 @@
     "test:xalqlar": "node tools/smoke/xalqlar.mjs"
   },
   "devDependencies": {
+    "@types/node": "^22.20.2",
     "playwright-core": "^1.61.1",
     "typescript": "~5.9.3"
   },
