@@ -29,6 +29,8 @@ export class Rider {
   private readonly model: Group;
   private readonly bones = new Map<string, Bone>();
   private readonly skins: SkinnedMesh[] = [];
+  /** Har bir suyakning boshlang'ich (o'lchamga moslangan) holati — pozadan oldin shu tiklanadi. */
+  private readonly rest = new Map<Bone, { position: Vector3; quaternion: Quaternion; scale: Vector3 }>();
   /** Pedal aylanish fazasi, radian. */
   private phase = 0;
   private signature = '';
@@ -39,7 +41,10 @@ export class Rider {
     this.model.traverse((node) => {
       // GLTFLoader tugun nomlaridagi `.` ni `_` ga almashtiradi; ikkala
       // ko'rinish ham bitta kalitga tushsin.
-      if (node instanceof Bone) this.bones.set(node.name.replace(/[._]/g, ''), node);
+      if (node instanceof Bone) {
+        this.bones.set(node.name.replace(/[._]/g, ''), node);
+        this.rest.set(node, { position: node.position.clone(), quaternion: node.quaternion.clone(), scale: node.scale.clone() });
+      }
       if (node instanceof SkinnedMesh) this.skins.push(node);
     });
     this.object.name = 'VisibleRider';
@@ -60,7 +65,14 @@ export class Rider {
     if (signature === this.signature) return;
     this.signature = signature;
 
-    for (const skin of this.skins) skin.skeleton.pose();
+    // `skeleton.pose()` EMAS: u suyaklarni bog'lanish matritsalaridan quradi, ular esa
+    // modelni o'lchamga moslashdan oldingi masshtabda. BaseHuman piyodalarida bu
+    // skeletni ~20 barobar kattalashtirib, NPC haydovchini binodan baland qilardi.
+    for (const [bone, rest] of this.rest) {
+      bone.position.copy(rest.position);
+      bone.quaternion.copy(rest.quaternion);
+      bone.scale.copy(rest.scale);
+    }
     this.model.position.set(0, 0, 0);
     this.model.rotation.set(0, 0, 0);
     this.object.updateMatrixWorld(true);
