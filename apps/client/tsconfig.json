@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@xarita/geo": ["../../packages/geo/src/index.ts"]
+    }
+  },
+  "include": ["src", "vite.config.ts"]
+}

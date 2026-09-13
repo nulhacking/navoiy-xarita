@@ -1,0 +1,565 @@
+:root {
+  color-scheme: dark;
+  --bg: #05070c;
+  --panel: rgba(12, 16, 24, 0.82);
+  --panel-border: rgba(255, 255, 255, 0.1);
+  --text: #e8ecf4;
+  --text-dim: #9aa5b8;
+  --accent: #4da3ff;
+  --danger: #ff6b6b;
+  --radius: 10px;
+  --font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+}
+
+.map-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 12px; }
+.map-tools span { min-width: 42px; text-align: center; font-variant-numeric: tabular-nums; }
+.map-tools small { color: var(--text-dim); }
+.map-tools button { padding: 5px 10px; }
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  /* Globus boshqaruvi sichqoncha va barmoq harakatlarini o'zi ushlaydi —
+     brauzerning "orqaga surish"/scroll xatti-harakati aralashmasligi kerak. */
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+.viewport {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.viewport canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.overlay > * {
+  pointer-events: auto;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(12px);
+}
+
+/* --- Statistika --- */
+.stats {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  min-width: 168px;
+}
+
+.stats .row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stats .row b {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.stats .row.warn b {
+  color: var(--danger);
+}
+
+.stats hr {
+  border: 0;
+  border-top: 1px solid var(--panel-border);
+  margin: 6px 0;
+}
+
+/* --- Atributsiya (Google talabi bo'yicha majburiy) --- */
+.attribution {
+  pointer-events: none;
+  position: absolute;
+  left: 14px;
+  bottom: 12px;
+  right: 14px;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.75);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+.attribution .logo {
+  flex-shrink: 0;
+  height: 18px;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.9));
+}
+
+.attribution .credits {
+  /* Google copyright ro'yxati uzun bo'lishi mumkin — ikki qatordan oshmasin. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* --- Ishga tushish ekrani --- */
+.boot {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(ellipse at center, #16202c 0%, #05070c 75%);
+}
+
+.boot .card {
+  padding: 22px 26px;
+  text-align: center;
+}
+
+.boot h2 {
+  margin: 0 0 6px;
+  font-size: 17px;
+}
+
+.boot p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+/* --- Kalit yo'q ekrani --- */
+.setup {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(ellipse at center, #0d1522 0%, #05070c 70%);
+}
+
+.setup .card {
+  max-width: 560px;
+  padding: 26px 28px;
+  line-height: 1.65;
+}
+
+.setup h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
+.setup p {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.setup ol {
+  margin: 0 0 16px;
+  padding-left: 20px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.setup li {
+  margin-bottom: 7px;
+}
+
+.setup code {
+  padding: 1px 5px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--accent);
+  background: rgba(77, 163, 255, 0.1);
+  border-radius: 4px;
+}
+
+.setup a {
+  color: var(--accent);
+}
+
+.setup .note {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: #ffd08a;
+  background: rgba(255, 190, 80, 0.08);
+  border: 1px solid rgba(255, 190, 80, 0.22);
+  border-radius: 8px;
+}
+
+/* --- Xatolar --- */
+.errors {
+  position: absolute;
+  right: 14px;
+  bottom: 40px;
+  max-width: 340px;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: #ffb3b3;
+  border-color: rgba(255, 107, 107, 0.3);
+}
+
+.errors div + div {
+  margin-top: 4px;
+}
+
+/* --- Boshqaruv yordami --- */
+.help {
+  position: absolute;
+  left: 50%;
+  bottom: 40px;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* Sichqoncha ushlanganda kursor yashiriladi — o'yin rejimi. */
+.viewport canvas {
+  cursor: crosshair;
+}
+
+.help kbd.hot {
+  color: #0b0f14;
+  background: #ffd166;
+  border-color: #ffd166;
+}
+
+.help kbd {
+  padding: 1px 5px;
+  margin: 0 2px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+}
+
+/* --- Mini-xarita (GTA uslubi) --- */
+.minimap {
+  position: absolute;
+  left: 18px;
+  bottom: 18px;
+  width: 190px;
+  height: 190px;
+  transition: opacity 0.4s ease;
+  /* Doira tashqarisidagi soya xaritani fondan ajratib turadi. */
+  filter: drop-shadow(0 4px 14px rgba(0, 0, 0, 0.55));
+}
+
+.minimap canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: 50%;
+}
+
+.minimap .speedo {
+  position: absolute;
+  right: -6px;
+  bottom: 6px;
+  padding: 3px 9px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 20px;
+}
+
+.minimap .speedo b {
+  font-size: 14px;
+  color: var(--text);
+}
+
+/* Yordam paneli mini-xarita ustiga tushmasin. */
+.help {
+  left: auto;
+  right: 18px;
+  transform: none;
+}
+
+/* --- Mini-xaritadagi metka masofasi --- */
+.minimap canvas {
+  cursor: pointer;
+}
+
+.minimap .waypoint-badge {
+  position: absolute;
+  left: 50%;
+  top: -10px;
+  transform: translateX(-50%);
+  padding: 2px 9px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: #0b0f14;
+  background: #ffd166;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+
+/* --- Katta xarita --- */
+.bigmap {
+  z-index: 20;
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(4, 7, 12, 0.72);
+  backdrop-filter: blur(3px);
+}
+
+.bigmap-panel {
+  max-width: min(94vw, calc(100dvh - 220px));
+  max-height: calc(100dvh - 36px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(86vh, 86vw);
+  padding: 14px 16px;
+}
+
+.bigmap-panel header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.bigmap-panel h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.bigmap-panel .hint {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.bigmap-panel .close {
+  margin-left: auto;
+  padding: 2px 9px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.bigmap-canvas {
+  position: relative;
+  aspect-ratio: 1;
+  min-height: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #161a20;
+}
+
+.bigmap-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+.bigmap-status {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.bigmap-panel footer {
+  flex-wrap: wrap;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  min-height: 30px;
+}
+
+.bigmap-panel footer button {
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.bigmap-panel footer button.primary {
+  color: #0b0f14;
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.bigmap-panel kbd {
+  padding: 1px 5px;
+  font-family: var(--mono);
+  font-size: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+}
+
+/* Soat va navigatsiya menyusi: ixcham, shisha effekti, mayda shrift */
+.clock {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  padding: 6px 8px;
+  width: 178px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: rgba(12, 16, 24, 0.75);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  transition: all 0.2s ease;
+  z-index: 10;
+}
+.clock.collapsed {
+  width: auto;
+  padding: 4px 8px;
+}
+.clock-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.clock-face {
+  font-size: 13px;
+  line-height: 1;
+}
+.clock-row b {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  letter-spacing: 0.3px;
+}
+.clock-row button {
+  padding: 1px 5px;
+  font: inherit;
+  font-size: 9px;
+  line-height: 14px;
+  color: var(--text-dim);
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+  transition: all 0.15s ease;
+}
+.clock-row button:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--text);
+}
+.clock-row button.live {
+  color: #0b0f14;
+  background: #ffd166;
+  border-color: #ffd166;
+  cursor: default;
+  font-weight: 600;
+}
+.clock-row .clock-toggle {
+  margin-left: 2px;
+  padding: 1px 5px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.clock input[type='range'] {
+  width: 100%;
+  height: 3px;
+  margin: 4px 0 2px;
+  accent-color: #ffd166;
+  cursor: pointer;
+}
+.clock-note {
+  font-size: 9px;
+  color: var(--text-dim);
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 2px;
+}
+.nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2.5px;
+  margin-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 4px;
+}
+.lake-visit {
+  width: 100%;
+  margin: 0;
+  padding: 3.5px 6px;
+  border: 1px solid rgba(104, 139, 137, 0.35);
+  border-radius: 4px;
+  background: rgba(32, 62, 66, 0.55);
+  color: #e4f6ed;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.25;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: all 0.15s ease;
+}
+.lake-visit:hover {
+  background: rgba(45, 85, 89, 0.9);
+  border-color: rgba(255, 218, 104, 0.6);
+  color: #ffffff;
+  transform: translateX(1px);
+}
+.lake-visit:focus-visible {
+  outline: 2px solid #ffda68;
+  outline-offset: 1px;
+}
+.lake-visit:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}

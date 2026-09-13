@@ -1,0 +1,6 @@
+SUV by Quaternius
+CC0
+https://poly.pizza/m/xsMtZhBkxL
+https://creativecommons.org/publicdomain/zero/1.0/
+https://static.poly.pizza/e5fbf2ee-5c9e-47d5-8ab6-80cacd463baa.glb
+Runtime normalization, wheel rig and rider pose added.

@@ -1,0 +1,14 @@
+# Vercel faqat buildga keraklisini oladi. Bu fayl bor ekan, .gitignore ishlatilmaydi —
+# shuning uchun u yerdagilar ham shu yerda takrorlanadi.
+node_modules
+dist
+apps/client/dist
+.vite
+.env
+.env.local
+*.tsbuildinfo
+perf-report.json
+# 119 MB O'zbekiston PBF ekstrakti: tayllar allaqachon public/osm da.
+tools/osm-pipeline/data
+# Test skrinshotlari va referenslar (~60 MB), saytga kerak emas.
+artifacts

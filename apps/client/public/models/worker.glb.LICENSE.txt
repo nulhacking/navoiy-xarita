@@ -1,0 +1,6 @@
+Worker by Quaternius
+CC0
+https://poly.pizza/m/Yg2bQZO6Hj
+https://creativecommons.org/publicdomain/zero/1.0/
+https://static.poly.pizza/3a5f3056-ffe6-42eb-bd52-122afcbd22b2.glb
+Runtime normalization, wheel rig and rider pose added.

@@ -1,0 +1,36 @@
+{
+  "name": "xarita",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "OSM koordinatalaridan qurilgan Navoiy 3D shahar o‘yini (Three.js + Rapier)",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @xarita/client",
+    "build": "npm run build --workspace @xarita/client",
+    "preview": "npm run preview --workspace @xarita/client",
+    "test": "npm run test --workspace @xarita/geo",
+    "typecheck": "tsc --noEmit -p packages/geo/tsconfig.json && tsc --noEmit -p apps/client/tsconfig.json",
+    "smoke": "node tools/smoke/check.mjs",
+    "test:city": "node tools/smoke/city.mjs",
+    "test:details": "node tools/smoke/details.mjs",
+    "test:fleet": "node tools/smoke/fleet.mjs",
+    "test:world": "node --experimental-strip-types --test tools/smoke/world.test.mjs",
+    "test:sky": "node tools/smoke/sky.mjs",
+    "test:lake": "node tools/smoke/lake.mjs",
+    "test:hokimiyat": "node tools/smoke/hokimiyat.mjs",
+    "test:farxod": "node tools/smoke/farxod.mjs",
+    "test:softex": "node tools/smoke/softex.mjs",
+    "test:xalqlar": "node tools/smoke/xalqlar.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.61.1",
+    "typescript": "~5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

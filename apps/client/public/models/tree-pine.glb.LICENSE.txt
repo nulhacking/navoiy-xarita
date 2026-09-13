@@ -1,0 +1,6 @@
+Pine by Quaternius
+CC0
+https://poly.pizza/m/Zt62gceKXZ
+https://creativecommons.org/publicdomain/zero/1.0/
+https://static.poly.pizza/be462d46-2e48-401e-8da9-2f4d9bc9df0c.glb
+Runtime normalization, wheel rig and rider pose added.

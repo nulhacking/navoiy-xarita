@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+.env.local
+*.tsbuildinfo
+.vite/
+perf-report.json
+tools/osm-pipeline/data/
+
+# Test skrinshotlari va shaxsiy referens fotosuratlar — repoga chiqmaydi
+artifacts/

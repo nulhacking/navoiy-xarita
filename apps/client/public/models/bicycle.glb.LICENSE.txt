@@ -1,0 +1,6 @@
+Bicycle by jeremy
+CC-BY
+https://poly.pizza/m/axc03j3xKfz
+https://creativecommons.org/licenses/by/3.0/
+https://static.poly.pizza/a561821d-efb9-4a36-ae99-61eff0772cf7.glb
+Runtime normalization, wheel rig and rider pose added.

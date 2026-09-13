@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    // ATAYLAB O'CHIRILGAN. Loyihaning yadrosi — qat'iy o'lchamli matritsa va
+    // vektor matematikasi (`m[0]`..`m[15]`, geometriya bufferlari). U yerda bu
+    // bayroq bironta ham haqiqiy xatoni topmaydi, faqat o'nlab `!` qo'shishga
+    // majbur qilib, o'qilishi eng muhim bo'lgan kodni buzadi.
+    // Qolgan barcha `strict` tekshiruvlar yoqilgan holicha.
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"],
+    "paths": {
+      "@xarita/geo": ["./packages/geo/src/index.ts"]
+    }
+  },
+  "include": ["packages/*/src", "packages/*/test", "apps/*/src", "apps/*/*.config.ts"]
+}

@@ -1,0 +1,37 @@
+# Netlify: statik sayt. OSM tayllari va modellar `public` da oldindan tayyor,
+# shuning uchun build faqat Vite — bake/fetch skriptlari serverda ishlamaydi.
+[build]
+  command = "npm run build"
+  publish = "apps/client/dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# Vite nomiga hash qo'shadi — bu fayllar hech qachon o'zgarmaydi.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# Modellar, OSM tayllari va relyef nomsiz hash: bir hafta kesh, keyin qayta tekshirish.
+[[headers]]
+  for = "/models/*"
+  [headers.values]
+    Cache-Control = "public, max-age=604800, must-revalidate"
+
+[[headers]]
+  for = "/osm/*"
+  [headers.values]
+    Cache-Control = "public, max-age=604800, must-revalidate"
+
+[[headers]]
+  for = "/terrain/*"
+  [headers.values]
+    Cache-Control = "public, max-age=604800, must-revalidate"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"

@@ -1,0 +1,6 @@
+Casual Character by Quaternius
+CC0 1.0 Universal (Public Domain)
+Source: https://poly.pizza/m/kZ3DmIoGip
+License: https://creativecommons.org/publicdomain/zero/1.0/
+Model: https://static.poly.pizza/90a9e2d4-053f-42f1-99a2-8f5e1180ea7f.glb
+Runtime modifications: height normalization, independent animation skeletons.

@@ -1,0 +1,6 @@
+Animated Woman by Quaternius
+CC0 1.0 Universal
+https://poly.pizza/m/nIItLV9nxS
+https://creativecommons.org/publicdomain/zero/1.0/
+https://static.poly.pizza/46d6db5a-3c9f-4238-8cdf-8eb7194498dc.glb
+Height normalization and independent skeletons at runtime. Low-poly, not photogrammetry.

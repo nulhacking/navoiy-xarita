@@ -1,0 +1,6 @@
+Woman in Tank Top by Quaternius
+CC0 1.0 Universal
+https://poly.pizza/m/XqzeZGB7iU
+https://creativecommons.org/publicdomain/zero/1.0/
+https://static.poly.pizza/9a6a3e55-23ce-4d5c-89bc-7d3f30307ed0.glb
+Height normalization and independent skeletons at runtime. Low-poly, not photogrammetry.

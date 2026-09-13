@@ -1,0 +1,6 @@
+Business Man by Quaternius
+CC0 1.0 Universal
+https://poly.pizza/m/JFrLIKqvCH
+https://creativecommons.org/publicdomain/zero/1.0/
+https://static.poly.pizza/e599abbe-7d73-488c-9d7e-3ead281e705c.glb
+Height normalization and independent skeletons at runtime. Low-poly, not photogrammetry.

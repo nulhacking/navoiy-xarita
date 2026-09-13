@@ -1,0 +1,6 @@
+Car by Quaternius
+CC0
+https://poly.pizza/m/Cz6yDaUcM9
+https://creativecommons.org/publicdomain/zero/1.0/
+https://static.poly.pizza/59a67a6c-490e-472e-bae6-5a4d2541f1c7.glb
+Runtime normalization, wheel rig and rider pose added.
