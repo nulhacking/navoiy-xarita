@@ -2,6 +2,7 @@ import { Box3, BufferAttribute, Color, ConeGeometry, CylinderGeometry, Group, Ic
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { createGltfLoader } from './GltfLoader.ts';
 import { QUALITY } from './Quality.ts';
+import { props } from './Breakables.ts';
 let templates:Array<Array<{geometry:BufferGeometry;material:Material|Material[]}>>=[];
 export async function loadTreeAssets():Promise<void> {
   templates=await Promise.all(['tree-broad','tree-pine'].map(async file=>{
@@ -56,7 +57,12 @@ export function assetTrees(points:Array<{x:number;z:number;scale:number;shape:nu
         });
         mesh.castShadow=imported;mesh.receiveShadow=true;mesh.computeBoundingSphere();target.add(mesh);
       };
+      const before=high.children.length;
       for(const part of templates[variant]!)instances(part,high,true);
+      // Har daraxt yiqitiladigan jihoz: shu variantning barcha qismlari bitta nusxa indeksi bilan.
+      const parts=high.children.slice(before) as InstancedMesh[];
+      selected.forEach((p,i)=>{if(p.kind===1)return;const h=p.scale*(variant===1?9:7.5);
+        props.add(lod,'tree',p.x,p.z,Math.max(.25,.32*p.scale),h,parts.map(mesh=>({mesh,index:i})));});
       for(const p of selected) {
         const h=p.scale*(p.kind===1?2:variant===1?9:7.5),width=h*(p.shape===3?.46:p.shape===2?1.15:1);
         const m=new Matrix4().compose(new Vector3(p.x-ox,heightAt(p.x,p.z)-oy,p.z-oz),new Quaternion(),new Vector3(width,h,width));

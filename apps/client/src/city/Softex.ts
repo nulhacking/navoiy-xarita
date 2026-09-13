@@ -478,9 +478,8 @@ export class Softex {
     const points: Array<{ x: number; z: number; scale: number; shape: number; kind: number }> = [];
     const add = (u: number, v: number, scale: number) => {
       const p = this.basis.point(u, v);
+      // Daraxt kollideri yo'q: to'siq va yiqilish `Breakables` da.
       points.push({ x: p.x, z: p.z, scale, shape: 3, kind: 0 });
-      this.physics.world.createCollider(RAPIER.ColliderDesc.cylinder(1.2, .18)
-        .setTranslation(u, this.y(u, v) + 1.2, v), this.body);
     };
     // Fotosuratdagi baland ignabargli daraxtlar — maydoncha chetida qator.
     for (let v = 4; v > -108; v -= 12) add(-20.6, v, .95 + (Math.sin(v * .7) * .12));

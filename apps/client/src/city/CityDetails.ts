@@ -4,6 +4,7 @@ import type { CityMapData } from './CityTile.ts';
 import type { Ground } from './Ground.ts';
 import type { TreeBounds } from './trees.ts';
 import { insidePolygon } from './RoadNetwork.ts';
+import { props } from './Breakables.ts';
 
 type Part={geometry:BufferGeometry;material:Material|Material[]};
 const prefabs=new Map<string,Part[]>();
@@ -122,11 +123,13 @@ export function buildCityDetails(map:CityMapData, buildings:BuildingDetail[],gro
     mesh.userData.ownedGeometry=true;mesh.userData.ownedMaterial=true;
     boxes.forEach((b,i)=>{mesh.setMatrixAt(i,b.matrix);mesh.setColorAt(i,new Color(b.color));});mesh.castShadow=true;mesh.receiveShadow=true;group.add(mesh);
   }
+  const created=new Map<string,InstancedMesh[]>();
   for(const [id,matrices] of [['air-conditioner',ac],['bench',benches],['street-lamp',lamps]] as const)for(const part of prefabs.get(id)??[]) {
     if(!matrices.length)continue;const mesh=new InstancedMesh(part.geometry,part.material,matrices.length);
     matrices.forEach((m,i)=>mesh.setMatrixAt(i,m));mesh.castShadow=true;mesh.receiveShadow=true;mesh.name=id;group.add(mesh);
+    created.set(id,[...(created.get(id)??[]),mesh]);
   }
-  addLightPools(group,lamps,ground);
+  registerFurniture(group,created,lamps,benches,addLightPools(group,lamps,ground));
   return group;
 }
 
@@ -135,22 +138,31 @@ export function buildParkFurniture(points:Array<{x:number;z:number;yaw:number}>,
   const group=new Group();group.name='Ozero · imported lamps and benches';
   const lamps=points.map(p=>new Matrix4().compose(new Vector3(p.x,ground.heightAt(p.x,p.z),p.z),new Quaternion().setFromAxisAngle(new Vector3(0,1,0),p.yaw),new Vector3(1,1,1)));
   const benches=points.filter((_,i)=>i%2===0).map(p=>new Matrix4().compose(new Vector3(p.x+Math.cos(p.yaw)*2,ground.heightAt(p.x+Math.cos(p.yaw)*2,p.z-Math.sin(p.yaw)*2),p.z-Math.sin(p.yaw)*2),new Quaternion().setFromAxisAngle(new Vector3(0,1,0),p.yaw),new Vector3(1,1,1)));
+  const created=new Map<string,InstancedMesh[]>();
   for(const [id,matrices] of [['street-lamp',lamps],['bench',benches]] as const)for(const part of prefabs.get(id)??[]) {
     if(!matrices.length)continue;
     const mesh=new InstancedMesh(part.geometry,part.material,matrices.length);matrices.forEach((m,i)=>mesh.setMatrixAt(i,m));
     mesh.name=id;mesh.castShadow=true;mesh.receiveShadow=true;group.add(mesh);
+    created.set(id,[...(created.get(id)??[]),mesh]);
   }
-  addLightPools(group,lamps,ground);return group;
+  registerFurniture(group,created,lamps,benches,addLightPools(group,lamps,ground));return group;
 }
 
 /** Faqat yerdagi yorug'lik dog'lari — o'z chiroq modeli bor landmarklar uchun. */
+/** Chiroq va skameykalarni yiqitiladigan jihoz sifatida ro'yxatga oladi (matritsa — dunyo koordinatasi). */
+function registerFurniture(owner:Group,created:Map<string,InstancedMesh[]>,lamps:Matrix4[],benches:Matrix4[],pool:InstancedMesh|null):void {
+  lamps.forEach((m,i)=>props.add(owner,'lamp',m.elements[12]!,m.elements[14]!,.22,7,[
+    ...(created.get('street-lamp')??[]).map(mesh=>({mesh,index:i})),...(pool?[{mesh:pool,index:i,hideOnly:true}]:[])]));
+  benches.forEach((m,i)=>props.add(owner,'bench',m.elements[12]!,m.elements[14]!,.75,.9,(created.get('bench')??[]).map(mesh=>({mesh,index:i}))));
+}
+
 export function buildLightPools(points:Array<{x:number;z:number}>,ground:Ground):Group {
   const group=new Group();group.name='street-light-pools';
   addLightPools(group,points.map(p=>new Matrix4().makeTranslation(p.x,0,p.z)),ground);
   return group;
 }
 
-function addLightPools(group:Group,lamps:Matrix4[],ground:Ground):void {
+function addLightPools(group:Group,lamps:Matrix4[],ground:Ground):InstancedMesh|null {
   if(lamps.length) {
     // Dog' yassi va yerdan 9 sm balandda. Balandlikning o'zi yetmaydi:
     // yo'l qatlamlari `polygonOffset` bilan kameraga tortilgan (`CityTile`
@@ -172,8 +184,11 @@ function addLightPools(group:Group,lamps:Matrix4[],ground:Ground):void {
     applyPool(pool);
     pools.add(pool);
     group.add(pool);
+    return pool;
   }
+  return null;
 }
 export function disposeCityDetails(group:Group):void {
+  props.remove(group);
   group.traverse(n=>{if(n instanceof InstancedMesh){pools.delete(n);n.dispose();if(n.userData.ownedGeometry)n.geometry.dispose();if(n.userData.ownedMaterial)(n.material as Material).dispose();}});group.clear();
 }

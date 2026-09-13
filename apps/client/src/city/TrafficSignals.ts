@@ -2,6 +2,7 @@ import { BoxGeometry, Color, CylinderGeometry, Group, InstancedMesh, Matrix4, Me
 import type { Ground } from './Ground.ts';
 import type { PointXZ, RoadEdge } from './RoadNetwork.ts';
 import { signalPhase, signalStops } from './SignalRules.ts';
+import { props } from './Breakables.ts';
 
 export class TrafficSignals {
   readonly group = new Group();
@@ -18,7 +19,7 @@ export class TrafficSignals {
   constructor(private ground: Ground, private points: PointXZ[]) {}
 
   setRoads(edges: RoadEdge[]): void {
-    this.group.clear(); this.heads = [];
+    this.group.clear(); this.heads = []; props.remove(this);
     this.stops = signalStops(edges,this.points);
     const items:Array<{edge:RoadEdge;x:number;y:number;z:number;yaw:number;width:number}>=[];
     for (const edge of edges) for (const distance of this.stops.get(edge.key) ?? []) {
@@ -51,6 +52,9 @@ export class TrafficSignals {
         matrix.compose(position.set(sx,this.ground.heightAt(sx,sz),sz),quaternion,scale);stripes.setMatrixAt(stripeIndex++,matrix);
       }
     });
+    // Har svetofor yiqitiladigan jihoz: ustun, quti va uch linza bir butun bo'lib qulaydi.
+    items.forEach((item,index)=>props.add(this,'signal',item.x,item.z,.2,3.6,[
+      {mesh:poles,index},{mesh:housings,index},{mesh:lamps,index:index*3},{mesh:lamps,index:index*3+1},{mesh:lamps,index:index*3+2}]));
     poles.castShadow=housings.castShadow=true;stripes.receiveShadow=true;
     this.group.add(poles,housings,stripes,lamps);
     this.lampMesh=lamps;
@@ -75,7 +79,7 @@ export class TrafficSignals {
   }
   get count():number {return this.heads.length;}
   dispose():void {
-    this.group.clear(); this.heads=[];
+    this.group.clear(); this.heads=[]; props.remove(this);
     for(const item of [this.pole,this.housing,this.lens,this.stripe,this.dark,this.paint,this.lensMaterial]) item.dispose();
   }
 }

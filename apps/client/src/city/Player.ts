@@ -18,6 +18,7 @@ import type { WaterZones } from './WaterZones.ts';
 import { alignCharacterFeet, type LoadedModel } from './models.ts';
 import type { Input } from './Input.ts';
 import { RAPIER, type Physics } from './Physics.ts';
+import type { Breakables } from './Breakables.ts';
 import { angleDifference, approach, yawRate } from './VehicleMotion.ts';
 import { animateVehicle } from './VehicleRig.ts';
 import { vehicleSpec, VEHICLE_SPECS } from './FleetAssets.ts';
@@ -101,6 +102,10 @@ export interface PlayerState {
   heading: number;
   /** Mashinaning joyi — mini-xaritada belgi qo'yish uchun. */
   carPosition: Vector3;
+  /** Mashina yo'nalishi (radian, +Z dan), yarim o'lchamlari va tezligi m/s — NPC'larga urilishni hisoblash uchun. */
+  carYaw: number;
+  carHalf: { x: number; y: number; z: number };
+  carSpeed: number;
   vehicleLabel: string;
   /** Suvda: 0 — quruqlikda, 1 — kechyapti, 2 — suzyapti. */
   water: 0 | 1 | 2;
@@ -127,6 +132,8 @@ export class Player {
   private readonly trafficVehicleDistance: ((position: Vector3, radius: number) => number | null) | undefined;
   private readonly claimTrafficVehicle: ((position: Vector3, radius: number) => VehicleClaim | null) | undefined;
   private readonly releaseVehicle: ((vehicle: VehicleClaim) => void) | undefined;
+  /** Yiqitiladigan jihozlar: to'siq va urilish (`Breakables`). */
+  private readonly props: Breakables | undefined;
   private rider: Rider | null = null;
 
   private readonly avatar: Object3D;
@@ -196,6 +203,7 @@ export class Player {
     trafficVehicleDistance?: (position: Vector3, radius: number) => number | null;
     claimTrafficVehicle?: (position: Vector3, radius: number) => VehicleClaim | null;
     releaseVehicle?: (vehicle: VehicleClaim) => void;
+    props?: Breakables;
   }) {
     this.physics = options.physics;
     this.ground = options.ground;
@@ -203,6 +211,7 @@ export class Player {
     this.trafficVehicleDistance = options.trafficVehicleDistance;
     this.claimTrafficVehicle = options.claimTrafficVehicle;
     this.releaseVehicle = options.releaseVehicle;
+    this.props = options.props;
     this.camera = options.camera;
 
     const { world } = options.physics;
@@ -310,6 +319,9 @@ export class Player {
       nearCar: this.isNearCar(),
       heading: this.mode === 'drive' ? this.carYaw + Math.PI : this.yaw,
       carPosition: this.carPosition.clone(),
+      carYaw: this.carYaw,
+      carHalf: this.spec.half,
+      carSpeed: this.carSpeed,
       vehicleLabel: this.spec.label,
       water: this.mode === 'drive'
         ? (this.carFlood > 0.02 ? 2 : this.carDepth > 0.08 ? 1 : 0)
@@ -412,16 +424,20 @@ export class Player {
       this.verticalSpeed = Math.max(-3, Math.min(3, (target - start.y) * BUOYANCY));
     }
 
+    // Qulagan jihoz va NPC bo'laklari (dinamik jismlar) yo'lni to'smaydi — ular suriladi.
     this.controller.computeColliderMovement(this.collider, {
       x: moveX * dt * drag,
       y: this.verticalSpeed * dt,
       z: moveZ * dt * drag,
-    });
+    }, RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC);
     const movement = this.controller.computedMovement();
     this.grounded = this.controller.computedGrounded();
 
     const position = this.bodyPosition(this.scratch);
     position.add(new Vector3(movement.x, movement.y, movement.z));
+    // Daraxt, ustun, skameyka: fizikada yo'q, shuning uchun doira bo'yicha tashqariga chiqaramiz.
+    const push = this.props?.pushOut(position.x, position.z, CAPSULE_RADIUS);
+    if (push) { position.x += push.x; position.z += push.z; }
     this.clampToCity(position, 1);
     this.body.setNextKinematicTranslation(position);
 
@@ -547,12 +563,20 @@ export class Player {
       z: forwardZ * this.carSpeed * dt,
     };
 
-    this.carController.computeColliderMovement(this.carCollider, desired);
+    this.carController.computeColliderMovement(this.carCollider, desired, RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC);
     const movement = this.carController.computedMovement();
     this.carGrounded = this.carController.computedGrounded();
 
     const before = { x: this.carPosition.x, z: this.carPosition.z };
     this.carPosition.add(new Vector3(movement.x, movement.y, movement.z));
+    // Jihozlar: tez urilsa yiqiladi va mashina massasiga qarab sekinlashadi, sekin tegsa to'siq.
+    const impact = this.props?.carImpact(this.carPosition, this.carYaw, this.spec.half, this.carSpeed);
+    if (impact?.mass) this.absorbImpact(impact.mass);
+    if (impact?.push) {
+      this.carPosition.x += impact.push.x;
+      this.carPosition.z += impact.push.z;
+      this.carSpeed = 0;
+    }
     this.clampToCity(this.carPosition, 3);
     this.carBody.setNextKinematicTranslation(this.carPosition);
 
@@ -647,6 +671,13 @@ export class Player {
     if (this.mode === 'drive') return true;
     const position = this.bodyPosition(this.scratch);
     return Math.hypot(position.x-this.carPosition.x,position.z-this.carPosition.z) < 7 || (this.trafficVehicleDistance?.(position, 7) ?? null) !== null;
+  }
+
+  /** Urilgan narsa massasiga qarab mashina tezligini yo'qotadi (kg). */
+  absorbImpact(mass: number): void {
+    if (mass <= 0) return;
+    const massOfCar = this.spec.kind === 'car' ? 1300 : this.spec.kind === 'motorcycle' ? 220 : 90;
+    this.carSpeed *= Math.max(.2, 1 - mass / (mass + massOfCar));
   }
 
   private enterCar(): void {

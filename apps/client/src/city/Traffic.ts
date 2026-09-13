@@ -54,6 +54,14 @@ export class Traffic {
    * qadam vaqtining asosiy qismini olardi.
    */
   private obstacleGrid = new Map<string, number[]>();
+  /**
+   * O'yinchi mashinasi urib yuborgan NPC'lar: kinematik boshqaruvdan olinib, haqiqiy
+   * dinamik jismga aylanadi (odam uchib ketadi, mashina surilib aylanadi) va bir necha
+   * soniyadan keyin yo'qoladi. Ro'yxat kichik — faqat urilganlar.
+   */
+  private knocked: Array<{ agent: Agent; body: RAPIER.RigidBody; lift: number; age: number }> = [];
+  /** Oxirgi qadamda urilgan NPC'larning jami massasi — o'yinchi mashinasi shunga sekinlashadi. */
+  private impactMass = 0;
   private seed = 47021;
   private spawnTimer = 0;
   private readonly water = new WaterZones();
@@ -202,6 +210,15 @@ export class Traffic {
 
   update(dt: number, player: PlayerState): void {
     this.signals.update(dt,player.position);
+    this.hitByPlayer(player);
+    for (let i = this.knocked.length - 1; i >= 0; i--) {
+      const k = this.knocked[i]!;
+      k.age += dt;
+      if (k.age < 8) continue;
+      this.physics.world.removeRigidBody(k.body);
+      this.remove(k.agent, false, true);
+      this.knocked.splice(i, 1);
+    }
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0) {
       this.spawnTimer = 0.5;
@@ -259,7 +276,7 @@ export class Traffic {
       }
       agent.controller.computeColliderMovement(agent.collider, {
         x: distance ? deltaX / distance * travel : 0, y: agent.vertical * dt, z: distance ? deltaZ / distance * travel : 0,
-      });
+      }, RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC);
       const movement = agent.controller.computedMovement();
       agent.grounded = agent.controller.computedGrounded();
       agent.body.setNextKinematicTranslation({ x: t.x + movement.x, y: t.y + movement.y, z: t.z + movement.z });
@@ -335,7 +352,7 @@ export class Traffic {
     agent.vertical = agent.grounded ? -0.8 : Math.max(-40, agent.vertical - 9.81 * dt);
     agent.body.setRotation({ x: 0, y: Math.sin(agent.yaw/2), z: 0, w: Math.cos(agent.yaw/2) }, true);
     agent.object.rotation.y = agent.yaw;
-    agent.controller.computeColliderMovement(agent.collider, { x: blocked ? 0 : dx, y: agent.vertical * dt, z: blocked ? 0 : dz });
+    agent.controller.computeColliderMovement(agent.collider, { x: blocked ? 0 : dx, y: agent.vertical * dt, z: blocked ? 0 : dz }, RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC);
     const movement = agent.controller.computedMovement();
     agent.grounded = agent.controller.computedGrounded();
     agent.body.setNextKinematicTranslation({ x: t.x+movement.x, y: t.y+movement.y, z: t.z+movement.z });
@@ -349,6 +366,13 @@ export class Traffic {
   }
 
   render(): void {
+    for (const { agent, body, lift } of this.knocked) {
+      const t = body.translation(), r = body.rotation();
+      agent.object.quaternion.set(r.x, r.y, r.z, r.w);
+      // Jism markazi gavda o'rtasida; model esa oyoq/g'ildirak sathidan boshlanadi.
+      const offset = new Vector3(0, -lift, 0).applyQuaternion(agent.object.quaternion);
+      agent.object.position.set(t.x + offset.x, t.y + offset.y, t.z + offset.z);
+    }
     for (const agent of this.agents) {
       const t = agent.body.translation();
       agent.object.position.set(t.x, t.y - (agent.pedestrian ? 0.9 : vehicleSpec(agent.object).half.y), t.z);
@@ -365,7 +389,51 @@ export class Traffic {
     }
   }
 
-  private remove(agent: Agent, transfer = false): void {
+  /** Mashina to'rtburchagiga tushgan NPC'larni urib yuboradi. */
+  private hitByPlayer(player: PlayerState): void {
+    if (player.mode !== 'drive' || Math.abs(player.carSpeed) < 3) return;
+    const fx = Math.sin(player.carYaw), fz = Math.cos(player.carYaw), rx = fz, rz = -fx;
+    const c = player.carPosition, h = player.carHalf;
+    for (const agent of [...this.agents]) {
+      const t = agent.body.translation(), dx = t.x - c.x, dz = t.z - c.z;
+      const reach = agent.pedestrian ? .45 : vehicleSpec(agent.object).half.x;
+      // Kinematik kollayderlar mashinani biroz oldinroq to'xtatadi — shuning uchun 0.6 m zaxira.
+      if (Math.abs(dx * fx + dz * fz) > h.z + reach + .6 || Math.abs(dx * rx + dz * rz) > h.x + reach + .6) continue;
+      this.knockDown(agent, fx * player.carSpeed, fz * player.carSpeed);
+    }
+  }
+
+  private knockDown(agent: Agent, vx: number, vz: number): void {
+    const t = agent.body.translation(), r = agent.body.rotation();
+    this.physics.world.removeCharacterController(agent.controller);
+    this.physics.world.removeRigidBody(agent.body);
+    this.agents = this.agents.filter((other) => other !== agent);
+    agent.mixer?.stopAllAction();
+    const spec = vehicleSpec(agent.object), mass = agent.pedestrian ? 75 : 1100;
+    const lift = agent.pedestrian ? .9 : spec.half.y;
+    const body = this.physics.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic()
+      .setTranslation(t.x, t.y + .05, t.z).setRotation(r).setLinearDamping(.3).setAngularDamping(agent.pedestrian ? .6 : 1.2).setCcdEnabled(true));
+    this.physics.world.createCollider((agent.pedestrian ? RAPIER.ColliderDesc.capsule(.55, .3) : RAPIER.ColliderDesc.cuboid(spec.half.x, spec.half.y, spec.half.z))
+      .setMass(mass).setFriction(agent.pedestrian ? .8 : .5).setRestitution(.15), body);
+    const speed = Math.hypot(vx, vz), share = agent.pedestrian ? 1.15 : .55;
+    body.applyImpulse({ x: vx * mass * share, y: mass * (agent.pedestrian ? Math.min(6, 1.5 + speed * .35) : Math.min(3, speed * .12)), z: vz * mass * share }, true);
+    // Odam oldinga ag'dariladi, mashina esa o'z o'qi atrofida aylanib ketadi.
+    const ux = vx / (speed || 1), uz = vz / (speed || 1), spin = (Math.random() - .5) * 2;
+    body.applyTorqueImpulse(agent.pedestrian
+      ? { x: uz * mass * speed * .35, y: spin * mass * .6, z: -ux * mass * speed * .35 }
+      : { x: 0, y: spin * mass * speed * .45, z: 0 }, true);
+    this.impactMass += agent.pedestrian ? mass * .5 : mass;
+    this.knocked.push({ agent, body, lift, age: 0 });
+  }
+
+  /** O'yinchi mashinasiga qaytadigan zarba massasi (o'qilgach nolga tushadi). */
+  takeImpact(): number {
+    const mass = this.impactMass;
+    this.impactMass = 0;
+    return mass;
+  }
+
+  private remove(agent: Agent, transfer = false, detached = false): void {
     agent.rider?.dispose();
     agent.mixer?.stopAllAction();
     agent.mixer?.uncacheRoot(agent.object);
@@ -373,13 +441,20 @@ export class Traffic {
     agent.object.traverse((child) => { if (child instanceof SkinnedMesh) skeletons.add(child.skeleton); });
     for (const skeleton of skeletons) skeleton.dispose();
     this.group.remove(agent.object);
-    this.physics.world.removeCharacterController(agent.controller);
-    this.physics.world.removeRigidBody(agent.body);
+    if (!detached) {
+      this.physics.world.removeCharacterController(agent.controller);
+      this.physics.world.removeRigidBody(agent.body);
+    }
     if(!transfer)for (const material of agent.ownedMaterials) material.dispose();
     this.agents = this.agents.filter((other) => other !== agent);
     // Geometry/materials belong to the shared model, not the clones.
   }
 
-  reset(): void { for (const agent of [...this.agents]) this.remove(agent); this.spawnTimer = 0; }
+  reset(): void {
+    for (const agent of [...this.agents]) this.remove(agent);
+    for (const k of this.knocked) { this.physics.world.removeRigidBody(k.body); this.remove(k.agent, false, true); }
+    this.knocked = [];
+    this.spawnTimer = 0;
+  }
   dispose(): void { this.reset(); this.signals.dispose(); }
 }

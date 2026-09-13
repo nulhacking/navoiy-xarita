@@ -18,6 +18,7 @@ import type { Ground } from './Ground.ts';
 import { insidePolygon } from './RoadNetwork.ts';
 import { assetTrees } from './TreeAssets.ts';
 import { QUALITY } from './Quality.ts';
+import { props } from './Breakables.ts';
 
 /** Bitta taylda eng ko'p shuncha daraxt. LOD tizimi 300m dan uzoqni yengil meshga aylantiradi. */
 const MAX_TREES = QUALITY.maxTreesPerTile;
@@ -313,6 +314,7 @@ function hash2(a: number, b: number): number {
 }
 
 export function disposeTrees(trees: TreeMeshes): void {
+  for (const object of trees.meshes) props.remove(object);
   for(const object of trees.meshes)object.traverse(mesh=>{
     if(mesh instanceof Mesh&&mesh.userData.ownedTreeGeometry)mesh.geometry.dispose();
     if(!(mesh instanceof InstancedMesh))return;

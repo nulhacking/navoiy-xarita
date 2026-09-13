@@ -345,9 +345,9 @@ export class Farxod {
   private planting() {
     const points: Array<{ x: number; z: number; scale: number; shape: number; kind: number }> = [];
     const add = (u: number, v: number, scale: number, shape: number) => {
-      const p = this.basis.point(u, v), y = this.y(u, v);
+      const p = this.basis.point(u, v);
+      // Kollider yo'q: daraxt `Breakables` orqali to'siq bo'ladi va urilsa yiqiladi.
       points.push({ x: p.x, z: p.z, scale, shape: shape === 1 ? 3 : shape, kind: 0 });
-      this.physics.world.createCollider(RAPIER.ColliderDesc.cylinder(1, .17).setTranslation(u, y + 1, v), this.body);
     };
     for (let v = -56; v < 58; v += 7.5) add(-5.5, v, .32, 1);
     for (let v = -60; v < 62; v += 9) add(-37, v, .38, 1);

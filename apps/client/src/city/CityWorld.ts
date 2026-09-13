@@ -35,6 +35,7 @@ import { Farxod } from './Farxod.ts';
 import { Softex } from './Softex.ts';
 import { XalqlarDostligi } from './XalqlarDostligi.ts';
 import { liteMaterials } from './LiteMaterials.ts';
+import { Breakables } from './Breakables.ts';
 import { LOW_QUALITY, QUALITY } from './Quality.ts';
 
 /** Geometriya yuklanadigan radius, tayl birligida (z14 tayl ≈ 1.9 km). */
@@ -88,6 +89,7 @@ export class CityWorld {
   farxod: Farxod | null = null;
   softex: Softex | null = null;
   xalqlar: XalqlarDostligi | null = null;
+  breakables: Breakables | null = null;
   paused = false;
   private teleporting = false;
   private mapsDirty = false;
@@ -192,6 +194,8 @@ export class CityWorld {
       signalData.signals.map(p => this.frame!.toLocal({...p,alt:0})),fleet);
     this.group.add(this.traffic.group);
     this.parked=new ParkedVehicles(this.physics);this.group.add(this.parked.group);
+    this.breakables = new Breakables(this.physics, this.ground);
+    this.group.add(this.breakables.group);
     this.player = new Player({
       physics: this.physics,
       ground: this.ground,
@@ -210,6 +214,7 @@ export class CityWorld {
         return parked<=traffic?this.parked?.claim(position,radius)??null:this.traffic?.claimVehicle(position,radius)??null;
       },
       releaseVehicle: vehicle => this.parked?.add(vehicle),
+      props: this.breakables,
       // `exactOptionalPropertyTypes` yoqilgan: yo'q maydonni `undefined`
       // bilan emas, umuman yubormaslik kerak.
       ...(this.carSpawn ? { carSpawn: this.carSpawn } : {}),
@@ -257,10 +262,12 @@ export class CityWorld {
       this.physics.step(ctx.dt, (dt) => {
         this.player!.update(dt);
         this.traffic?.update(dt, this.player!.state);
+        this.player!.absorbImpact(this.traffic?.takeImpact() ?? 0);
       });
     }
     this.player.render();
     this.traffic?.render();
+    this.breakables?.update(this.paused ? 0 : ctx.dt);
 
     // Quyosh o'yinchi bilan birga ko'chadi. Yo'naltirilgan chiroqning o'zi
     // cheksiz uzoqda bo'lsa ham, uning SOYA KAMERASI cheklangan maydonni
@@ -584,6 +591,7 @@ export class CityWorld {
   dispose(): void {
     this.disposed = true;
     this.traffic?.dispose();
+    this.breakables?.dispose();
     this.parked?.dispose();
     this.player?.dispose();
     this.lake?.dispose();

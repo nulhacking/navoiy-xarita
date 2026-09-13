@@ -224,7 +224,7 @@ export class Hokimiyat {
     const points:Array<{x:number;z:number;scale:number;shape:number;kind:number}>=[];
     const add=(u:number,v:number,scale:number,shape:number)=>{
       const p=this.basis.point(u,v),y=this.y(u,v);points.push({x:p.x,z:p.z,scale,shape:shape===1?3:shape,kind:0});
-      this.physics.world.createCollider(RAPIER.ColliderDesc.cylinder(1,.16).setTranslation(u,y+1,v),this.body);
+      // Daraxt kollideri yo'q: to'siq va yiqilish `Breakables` da.
       if(shape===2)this.beam(new Vector3(u,y,v),new Vector3(u,y+1.1,v),.13,'white');
     };
     // Conifers frame the civic square; mature broadleaf trees shelter the approach roads.

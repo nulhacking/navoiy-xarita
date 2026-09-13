@@ -1,6 +1,6 @@
 import { QUALITY } from './Quality.ts';
 import {
-  BoxGeometry, BufferAttribute, BufferGeometry, CylinderGeometry, DoubleSide, Group, IcosahedronGeometry, Mesh,
+  BoxGeometry, BufferAttribute, BufferGeometry, CylinderGeometry, DoubleSide, Group, IcosahedronGeometry, InstancedMesh, Matrix4, Mesh,
   MeshStandardMaterial, OctahedronGeometry, Points, PointsMaterial, Quaternion, ShapeUtils, SphereGeometry,
   TorusGeometry, Vector2, Vector3,
 } from 'three';
@@ -13,6 +13,7 @@ import { Physics, RAPIER } from './Physics.ts';
 import { assetTrees } from './TreeAssets.ts';
 import { disposeTrees, type TreeMeshes } from './trees.ts';
 import { buildLightPools, buildParkFurniture, disposeCityDetails } from './CityDetails.ts';
+import { props } from './Breakables.ts';
 import { asphaltTexture, parkPavingTexture } from './SurfaceMaterials.ts';
 import {
   XD_BILLBOARDS, XD_BOULEVARD, XD_BUS_STOPS, XD_CROSSINGS, XD_GARLANDS, XD_HOTEL, XD_JUNCTIONS, XD_MALL,
@@ -199,7 +200,8 @@ class Site {
     return out.filter(([a, b]) => b - a > .3);
   }
 
-  tree(u: number, v: number, scale: number, shape: number, collide = true): void {
+  /** Daraxt kollidersiz: to'qnashuvni `Breakables` beradi (yiqilishi uchun). */
+  tree(u: number, v: number, scale: number, shape: number, collide = false): void {
     const p = this.basis.point(u, v);
     this.trees.push({ x: p.x, z: p.z, scale, shape, kind: 0 });
     if (collide) {
@@ -252,6 +254,8 @@ export class XalqlarDostligi {
   private readonly lens: MeshStandardMaterial[] = [];
   private readonly signalHeads: Array<{ material: MeshStandardMaterial; colour: 'red' | 'amber' | 'green'; offset: number }> = [];
   private readonly lampPoints: Array<{ x: number; z: number }> = [];
+  private readonly lampPlacements: Array<{ site: Site; u: number; v: number; toward: 1 | -1; palm: boolean }> = [];
+  private readonly lampMeshes: InstancedMesh[] = [];
   private readonly nozzles: Array<{ u: number; v: number; y: number; reach: number }> = [];
   private readonly jets: Points<BufferGeometry, PointsMaterial>;
   private time = 0;
@@ -346,6 +350,7 @@ export class XalqlarDostligi {
     }
     const pools = buildLightPools(this.lampPoints, ground);
     world.add(pools);
+    this.buildLamps(world, pools.children.find((n): n is InstancedMesh => n instanceof InstancedMesh) ?? null);
     this.extras.push(pools);
     const benches = this.boulevardFurniture();
     world.add(benches);
@@ -644,26 +649,72 @@ export class XalqlarDostligi {
    * Shimolda "palma" (8 yaproqli bezakli bosh), boshqa joyda T-shaklli ikki boshli.
    */
   private lamp(s: Site, u: number, v: number, toward: 1 | -1, palm: boolean): void {
-    const y = s.y(u, v), h = palm ? 11 : 10;
-    s.cylinder(u, v, y - .05, .5, .32, .36, 'concrete', 10, true);
-    s.cylinder(u, v, y + .4, h - .4, .09, .16, palm ? 'metalLight' : 'metal', 8);
-    const top = new Vector3(u, y + h, v);
-    if (palm) {
-      for (let i = 0; i < 8; i++) {
-        const a = i / 8 * Math.PI * 2, tip = new Vector3(u + Math.cos(a) * 1.25, y + h + 1.1, v + Math.sin(a) * 1.25);
-        s.beam(top, tip, .05, 'metalLight');
-        s.add(new BoxGeometry(.9, .06, .3).rotateY(-a).translate(tip.x, tip.y, tip.z), 'lampLens');
+    this.lampPlacements.push({ site: s, u, v, toward, palm });
+    this.lampPoints.push(s.world(u + toward * 2.5, v));
+  }
+
+  /**
+   * Chiroq ustunlari: ikki shablon (T-shakl va "palma") × material bo'yicha
+   * `InstancedMesh`. Birlashtirilgan umumiy meshda bitta ustunni yiqitib bo'lmasdi;
+   * endi har ustun `Breakables` da alohida jihoz — mashina urilsa qulaydi.
+   * Shablon mahalliy freymda: poydevor markazi (0, 0, 0), +x — yo'l tomoni.
+   */
+  private buildLamps(world: Group, pool: InstancedMesh | null): void {
+    const template = (palm: boolean) => {
+      const parts = new Map<string, BufferGeometry[]>();
+      const put = (key: string, g: BufferGeometry) => { const list = parts.get(key) ?? []; list.push(g.index ? g.toNonIndexed() : g); parts.set(key, list); };
+      const beam = (a: Vector3, b: Vector3, r: number, key: string) => {
+        const delta = b.clone().sub(a), length = delta.length();
+        const q = new Quaternion().setFromUnitVectors(new Vector3(0, 1, 0), delta.normalize()), p = a.clone().add(b).multiplyScalar(.5);
+        put(key, new CylinderGeometry(r, r, length, 6).applyQuaternion(q).translate(p.x, p.y, p.z));
+      };
+      const h = palm ? 11 : 10;
+      put('concrete', new CylinderGeometry(.32, .36, .5, 10).translate(0, .2, 0));
+      put(palm ? 'metalLight' : 'metal', new CylinderGeometry(.09, .16, h - .4, 8).translate(0, .4 + (h - .4) / 2, 0));
+      const top = new Vector3(0, h, 0);
+      if (palm) {
+        for (let i = 0; i < 8; i++) {
+          const a = i / 8 * Math.PI * 2, tip = new Vector3(Math.cos(a) * 1.25, h + 1.1, Math.sin(a) * 1.25);
+          beam(top, tip, .05, 'metalLight');
+          put('lampLens', new BoxGeometry(.9, .06, .3).rotateY(-a).translate(tip.x, tip.y, tip.z));
+        }
+      } else {
+        for (const dir of [1, -1]) {
+          const end = new Vector3(dir * (dir === 1 ? 2.2 : 1.2), h + .35, 0);
+          beam(new Vector3(0, h - .3, 0), end, .05, 'metal');
+          put('metal', new BoxGeometry(.75, .16, .34).translate(end.x, end.y - .08, 0));
+          put('lampLens', new BoxGeometry(.6, .04, .26).translate(end.x, end.y - .18, 0));
+        }
       }
-    } else {
-      for (const dir of [toward, -toward] as const) {
-        const end = new Vector3(u + dir * (dir === toward ? 2.2 : 1.2), y + h + .35, v);
-        s.beam(new Vector3(u, y + h - .3, v), end, .05, 'metal');
-        s.box(end.x, end.y - .08, v, .75, .16, .34, 'metal');
-        s.box(end.x, end.y - .18, v, .6, .04, .26, 'lampLens');
-      }
+      return new Map([...parts].map(([key, list]) => [key, mergeGeometries(list)!]));
+    };
+    for (const palm of [false, true]) {
+      const placements = this.lampPlacements.filter((p) => p.palm === palm);
+      if (!placements.length) continue;
+      const meshes = [...template(palm)].map(([key, geometry]) => {
+        const mesh = new InstancedMesh(geometry, this.materials[key], placements.length);
+        mesh.name = `XD · lamp · ${key}`;
+        mesh.castShadow = key !== 'lampLens';
+        mesh.receiveShadow = true;
+        this.lampMeshes.push(mesh);
+        world.add(mesh);
+        return mesh;
+      });
+      const matrix = new Matrix4(), rotation = new Quaternion(), up = new Vector3(0, 1, 0), one = new Vector3(1, 1, 1);
+      placements.forEach((p, i) => {
+        const at = p.site.basis.point(p.u, p.v);
+        at.y = this.ground.heightAt(at.x, at.z);
+        rotation.setFromAxisAngle(up, p.site.group.rotation.y + (p.toward === 1 ? 0 : Math.PI));
+        matrix.compose(at, rotation, one);
+        for (const mesh of meshes) mesh.setMatrixAt(i, matrix);
+        const poolIndex = this.lampPlacements.indexOf(p);
+        props.add(this, 'lamp', at.x, at.z, .3, palm ? 11 : 10, [
+          ...meshes.map((mesh) => ({ mesh, index: i })),
+          ...(pool ? [{ mesh: pool, index: poolIndex, hideOnly: true }] : []),
+        ]);
+      });
+      for (const mesh of meshes) mesh.computeBoundingSphere();
     }
-    const p = s.world(u + toward * 2.5, v);
-    this.lampPoints.push(p);
   }
 
   private garlands(): void {
@@ -1097,6 +1148,8 @@ export class XalqlarDostligi {
   }
 
   dispose(): void {
+    props.remove(this);
+    for (const mesh of this.lampMeshes) { mesh.geometry.dispose(); mesh.dispose(); }
     if (this.trees) {
       for (const m of this.trees.meshes) m.removeFromParent();
       disposeTrees(this.trees);
