@@ -1,5 +1,5 @@
 /**
- * Klaviatura va sichqoncha holati.
+ * Klaviatura, sichqoncha va sensorli ekran holati.
  *
  * O'yin sikli har kadr holatni O'QIYDI (hodisalarga reaksiya qilmaydi) —
  * shuning uchun bu yerda faqat holat to'planadi. Sichqoncha burilishi esa
@@ -19,6 +19,19 @@ export class Input {
   /** Bir marta bosilishi kerak bo'lgan tugmalar (masalan "mashinaga o'tirish"). */
   private readonly pressed = new Set<string>();
 
+  /**
+   * Ekrandagi boshqaruv (`TouchControls`): klaviatura bilan BIR XIL kodlar
+   * orqali ishlaydi, shuning uchun `Player` qaysi qurilma ekanini bilmaydi.
+   * Joystik esa analog — yarim og'dirilganda sekin yuriladi.
+   */
+  private readonly virtualKeys = new Set<string>();
+  private virtualAxis = { x: 0, y: 0 };
+  /** Kamerani sudrayotgan barmoqlar: pointerId → oxirgi nuqta. */
+  private readonly touches = new Map<number, { x: number; y: number }>();
+  private pinchDistance = 0;
+  /** Sensorli bosishdan keyin brauzer soxta `mousedown` yuboradi — pointer lock so'ralmasin. */
+  private lastTouch = -Infinity;
+
   constructor(element: HTMLElement) {
     this.element = element;
     window.addEventListener('keydown', this.onKeyDown);
@@ -30,6 +43,63 @@ export class Input {
     element.addEventListener('contextmenu', this.onContextMenu);
     document.addEventListener('pointerlockchange', this.onPointerLockChange);
     element.addEventListener('wheel', this.onWheel, { passive: false });
+    element.addEventListener('pointerdown', this.onPointerDown);
+    element.addEventListener('pointermove', this.onPointerMove);
+    element.addEventListener('pointerup', this.onPointerUp);
+    element.addEventListener('pointercancel', this.onPointerUp);
+  }
+
+  // --- Sensorli ekran: bir barmoq — kamera, ikki barmoq — masofa -------------
+
+  private onPointerDown = (event: PointerEvent): void => {
+    if (event.pointerType !== 'touch') return;
+    this.lastTouch = performance.now();
+    if (!this.enabled) return;
+    this.element.setPointerCapture?.(event.pointerId);
+    this.touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    this.pinchDistance = this.touchSpread();
+  };
+
+  private onPointerMove = (event: PointerEvent): void => {
+    const last = this.touches.get(event.pointerId);
+    if (event.pointerType !== 'touch' || !last || !this.enabled) return;
+    if (this.touches.size === 1) {
+      // Barmoq sichqonchadan sezgirroq bo'lishi kerak: ekran kichik, harakat qisqa.
+      this.mouseDeltaX += (event.clientX - last.x) * 1.6;
+      this.mouseDeltaY += (event.clientY - last.y) * 1.6;
+    }
+    last.x = event.clientX;
+    last.y = event.clientY;
+    if (this.touches.size === 2) {
+      const spread = this.touchSpread();
+      // Barmoqlar yaqinlashsa kamera uzoqlashadi — xaritadagidek.
+      if (this.pinchDistance > 0) this.wheelDelta += (this.pinchDistance - spread) * 4;
+      this.pinchDistance = spread;
+    }
+  };
+
+  private onPointerUp = (event: PointerEvent): void => {
+    if (!this.touches.delete(event.pointerId)) return;
+    this.pinchDistance = this.touchSpread();
+  };
+
+  private touchSpread(): number {
+    if (this.touches.size < 2) return 0;
+    const [a, b] = [...this.touches.values()];
+    return Math.hypot(a!.x - b!.x, a!.y - b!.y);
+  }
+
+  /** Joystik: x — o'ngga, y — oldinga, har biri [-1, 1]. */
+  setVirtualAxis(x: number, y: number): void {
+    this.virtualAxis = this.enabled ? { x, y } : { x: 0, y: 0 };
+  }
+
+  /** Ekrandagi tugma bosildi/qo'yib yuborildi — klaviatura kodi bilan. */
+  setVirtualKey(code: string, down: boolean): void {
+    if (down && this.enabled) {
+      if (!this.virtualKeys.has(code)) this.pressed.add(code);
+      this.virtualKeys.add(code);
+    } else this.virtualKeys.delete(code);
   }
 
   private onKeyDown = (event: KeyboardEvent): void => {
@@ -51,10 +121,18 @@ export class Input {
     this.mouseDeltaX = 0;
     this.mouseDeltaY = 0;
     this.wheelDelta = 0;
+    this.releaseVirtual();
   };
 
+  private releaseVirtual(): void {
+    this.virtualKeys.clear();
+    this.virtualAxis = { x: 0, y: 0 };
+    this.touches.clear();
+    this.pinchDistance = 0;
+  }
+
   private onMouseDown = (event: MouseEvent): void => {
-    if (!this.enabled) return;
+    if (!this.enabled || performance.now() - this.lastTouch < 800) return;
     if (event.button === 2) { this.dragging = true; event.preventDefault(); return; }
     if (event.button !== 0) return;
     if (!this.pointerLocked) this.element.requestPointerLock()?.catch(() => { /* Esc or browser refusal: click again to retry. */ });
@@ -92,12 +170,13 @@ export class Input {
       this.pressed.clear();
       this.mouseDeltaX = 0;
       this.mouseDeltaY = 0;
+      this.releaseVirtual();
       if (document.pointerLockElement === this.element) document.exitPointerLock();
     }
   }
 
   isDown(code: string): boolean {
-    return this.keys.has(code);
+    return this.keys.has(code) || this.virtualKeys.has(code);
   }
 
   /** Shu kadrda bosilganmi. O'qilgach holat tozalanadi. */
@@ -133,6 +212,8 @@ export class Input {
     if (this.isDown('KeyS') || this.isDown('ArrowDown')) y -= 1;
     if (this.isDown('KeyD') || this.isDown('ArrowRight')) x += 1;
     if (this.isDown('KeyA') || this.isDown('ArrowLeft')) x -= 1;
+    x += this.virtualAxis.x;
+    y += this.virtualAxis.y;
     const length = Math.hypot(x, y);
     return length > 1 ? { x: x / length, y: y / length } : { x, y };
   }
@@ -147,6 +228,10 @@ export class Input {
     this.element.removeEventListener('contextmenu', this.onContextMenu);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
     this.element.removeEventListener('wheel', this.onWheel);
+    this.element.removeEventListener('pointerdown', this.onPointerDown);
+    this.element.removeEventListener('pointermove', this.onPointerMove);
+    this.element.removeEventListener('pointerup', this.onPointerUp);
+    this.element.removeEventListener('pointercancel', this.onPointerUp);
     if (document.pointerLockElement === this.element) document.exitPointerLock();
   }
 }

@@ -563,3 +563,171 @@ body,
   opacity: 0.5;
   cursor: wait;
 }
+
+/* --- Telefon va planshet (body.touch) --- */
+body.touch .help {
+  display: none;
+}
+
+body.touch .overlay,
+body.touch .touch-controls {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Mini-xarita o'ng tepaga: chap past burchak joystikniki. */
+body.touch .minimap {
+  left: auto;
+  right: calc(10px + env(safe-area-inset-right));
+  top: calc(10px + env(safe-area-inset-top));
+  bottom: auto;
+  width: 112px;
+  height: 112px;
+}
+
+body.touch .minimap .speedo {
+  right: 0;
+  bottom: -26px;
+  white-space: nowrap;
+}
+
+body.touch .clock {
+  top: calc(8px + env(safe-area-inset-top));
+  left: calc(8px + env(safe-area-inset-left));
+  width: min(210px, 58vw);
+  font-size: 12px;
+}
+
+body.touch .lake-visit {
+  padding: 8px 8px;
+  font-size: 12px;
+}
+
+body.touch .clock-row button {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+body.touch .attribution {
+  left: 50%;
+  right: auto;
+  bottom: calc(2px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  width: 46vw;
+  font-size: 7px;
+  text-align: center;
+}
+
+body.touch .attribution .credits {
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+}
+
+body.touch .errors {
+  top: 140px;
+  bottom: auto;
+  right: 10px;
+  max-width: 60vw;
+}
+
+body.touch .bigmap-panel {
+  max-width: 100vw;
+  width: min(96vw, 96dvh);
+  padding: 10px;
+}
+
+.touch-controls {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.joystick {
+  pointer-events: auto;
+  position: absolute;
+  left: calc(22px + env(safe-area-inset-left));
+  bottom: calc(26px + env(safe-area-inset-bottom));
+  width: 136px;
+  height: 136px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.08) 0%, rgba(12, 16, 24, 0.45) 70%);
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  touch-action: none;
+}
+
+.joystick-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 58px;
+  height: 58px;
+  margin: -29px 0 0 -29px;
+  border-radius: 50%;
+  background: rgba(232, 236, 244, 0.55);
+  border: 2px solid rgba(255, 255, 255, 0.75);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+.touch-buttons {
+  pointer-events: none;
+  position: absolute;
+  right: calc(16px + env(safe-area-inset-right));
+  bottom: calc(22px + env(safe-area-inset-bottom));
+  display: grid;
+  grid-template-columns: repeat(2, 66px);
+  gap: 12px;
+  direction: rtl;
+}
+
+.touch-btn {
+  pointer-events: auto;
+  direction: ltr;
+  width: 66px;
+  height: 66px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 0;
+  font: inherit;
+  color: var(--text);
+  background: rgba(12, 16, 24, 0.55);
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-radius: 50%;
+  touch-action: none;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.touch-btn span {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.touch-btn small {
+  font-size: 9px;
+  color: var(--text-dim);
+}
+
+.touch-btn:active,
+.touch-btn.on {
+  background: rgba(77, 163, 255, 0.45);
+  border-color: var(--accent);
+}
+
+.touch-btn.hot {
+  background: rgba(255, 209, 102, 0.85);
+  border-color: #ffd166;
+}
+
+.touch-btn.hot small,
+.touch-btn.hot span {
+  color: #0b0f14;
+}
+
+.touch-btn:disabled {
+  opacity: 0.35;
+}

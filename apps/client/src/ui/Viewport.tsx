@@ -8,6 +8,8 @@ import { Engine } from '../engine/Engine.ts';
 import { useAppStore } from '../state/store.ts';
 import { BigMap } from './BigMap.tsx';
 import { Hud } from './Hud.tsx';
+import { TouchControls } from './TouchControls.tsx';
+import { isTouchDevice } from './device.ts';
 
 /** UI ni har kadr yangilash isrofgarchilik — sekundiga 5 marta yetarli. */
 const HUD_INTERVAL = 0.2;
@@ -17,6 +19,8 @@ export function Viewport() {
   const minimapRef = useRef<HTMLCanvasElement>(null);
   const [fatal, setFatal] = useState<string | null>(null);
   const cityRef = useRef<CityWorld | null>(null);
+  // Ekrandagi boshqaruv `Input` ga to'g'ridan-to'g'ri yozadi; u effekt ichida yaratiladi.
+  const [input, setInput] = useState<Input | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -54,6 +58,8 @@ export function Viewport() {
     }
 
     cityRef.current = city;
+    setInput(input);
+    document.body.classList.toggle('touch', isTouchDevice);
     let disposed = false;
     let hudTimer = 0;
     let removeMinimap: (() => void) | null = null;
@@ -161,6 +167,7 @@ export function Viewport() {
       window.removeEventListener('keydown', onKey);
       city.dispose();
       cityRef.current = null;
+      setInput(null);
       input.dispose();
       engine.dispose();
       canvas.remove();
@@ -183,6 +190,7 @@ export function Viewport() {
       ) : (
         <Hud
           minimapRef={minimapRef}
+          touch={isTouchDevice && input ? <TouchControls input={input} /> : null}
           setCityHour={(hour) => cityRef.current?.clock.setCityHour(hour)}
           resetClock={() => cityRef.current?.clock.reset()}
           visitLake={async()=>{

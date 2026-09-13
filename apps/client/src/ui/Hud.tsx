@@ -2,11 +2,13 @@ import { useState } from 'react';
 
 import { useAppStore } from '../state/store.ts';
 import { MODEL_ATTRIBUTION } from '../city/models.ts';
+import { isTouchDevice } from './device.ts';
 
 /** Navoiy o'yin rejimi uchun HUD. */
 export function Hud({
   minimapRef,
   bigMap,
+  touch,
   setCityHour,
   resetClock,
   visitLake,
@@ -17,6 +19,8 @@ export function Hud({
 }: {
   minimapRef: React.Ref<HTMLCanvasElement>;
   bigMap: React.ReactNode;
+  /** Telefon/planshet boshqaruvi; kompyuterda `null`. */
+  touch: React.ReactNode;
   setCityHour: (hour: number) => void;
   resetClock: () => void;
   visitLake: () => Promise<void>;
@@ -32,7 +36,7 @@ export function Hud({
       <Clock setCityHour={setCityHour} resetClock={resetClock} visitLake={visitLake} visitHokimiyat={visitHokimiyat} visitFarxod={visitFarxod} visitSoftex={visitSoftex} visitXalqlar={visitXalqlar} />
       <Loading />
       <Stats />
-      <Controls />
+      {touch ?? <Controls />}
       <Errors />
       <Attribution />
     </div>
@@ -93,7 +97,8 @@ function Clock({ setCityHour, resetClock, visitLake, visitHokimiyat, visitFarxod
   const [visitingFarxod,setVisitingFarxod]=useState(false);
   const [visitingSoftex,setVisitingSoftex]=useState(false);
   const [visitingXalqlar,setVisitingXalqlar]=useState(false);
-  const [collapsed, setCollapsed] = useState(false);
+  // Telefonda menyu ekranning katta qismini yopib qo'yadi — yig'ilgan holda boshlanadi.
+  const [collapsed, setCollapsed] = useState(isTouchDevice);
   const sky = useAppStore((s) => s.sky);
   const ready = useAppStore((s) => s.ready);
   const mapOpen = useAppStore((s) => s.mapOpen);

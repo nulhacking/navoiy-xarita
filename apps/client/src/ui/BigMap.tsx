@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CityOverview } from '../city/CityOverview.ts';
 import { MapView } from '../city/MapView.ts';
 import { useAppStore } from '../state/store.ts';
+import { isTouchDevice } from './device.ts';
 
 export interface BigMapProps {
   /** Umumiy xaritani bir marta quradi (keyingi chaqiruvlar keshdan). */
@@ -31,6 +32,8 @@ export function BigMap({ loadOverview, playerXZ, teleport }: BigMapProps) {
   const view = useRef(new MapView());
   const drag = useRef<{ x: number; y: number; startX: number; startY: number; moved: boolean } | null>(null);
   const suppressClick = useRef(false);
+  /** Ekrandagi barmoqlar — ikkitasi bo'lsa masshtab. */
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
   const [zoom, setZoom] = useState(1);
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle');
   const [travelling, setTravelling] = useState(false);
@@ -182,7 +185,7 @@ export function BigMap({ loadOverview, playerXZ, teleport }: BigMapProps) {
             view.current.center(pixel.px / overview.canvas.width, pixel.py / overview.canvas.height);
             setZoom(view.current.zoom);
           }}>Mening joyim</button>
-          <small>G‘ildirak: masshtab · Sudrash: xaritani surish</small>
+          <small>{isTouchDevice ? 'Ikki barmoq: masshtab · Sudrash: surish' : 'G‘ildirak: masshtab · Sudrash: xaritani surish'}</small>
         </div>
         <div className="bigmap-canvas">
           {status === 'loading' ? <div className="bigmap-status">Xarita tayyorlanmoqda…</div> : null}
@@ -196,10 +199,26 @@ export function BigMap({ loadOverview, playerXZ, teleport }: BigMapProps) {
             }}
             onPointerDown={(event) => {
               event.currentTarget.setPointerCapture(event.pointerId);
+              pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+              // Ikkinchi barmoq tushdi: bu metka qo'yish emas, masshtab.
+              if (pointers.current.size > 1) { suppressClick.current = true; drag.current = null; return; }
               suppressClick.current = false;
               drag.current = { x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, moved: false };
             }}
             onPointerMove={(event) => {
+              const touch = pointers.current.get(event.pointerId);
+              if (touch && pointers.current.size === 2) {
+                const [a, b] = [...pointers.current.values()];
+                const before = Math.hypot(a!.x - b!.x, a!.y - b!.y);
+                touch.x = event.clientX; touch.y = event.clientY;
+                const after = Math.hypot(a!.x - b!.x, a!.y - b!.y);
+                const rect = event.currentTarget.getBoundingClientRect();
+                const size = Math.min(rect.width, rect.height);
+                if (before > 10) view.current.zoomAt(after / before, ((a!.x + b!.x) / 2 - rect.left) / size, ((a!.y + b!.y) / 2 - rect.top) / size);
+                setZoom(view.current.zoom);
+                return;
+              }
+              if (touch) { touch.x = event.clientX; touch.y = event.clientY; }
               const d = drag.current;
               if (!d) return;
               if (Math.hypot(event.clientX - d.startX, event.clientY - d.startY) > 4) d.moved = true;
@@ -210,8 +229,13 @@ export function BigMap({ loadOverview, playerXZ, teleport }: BigMapProps) {
               }
               d.x = event.clientX; d.y = event.clientY;
             }}
-            onPointerUp={() => { suppressClick.current = !!drag.current?.moved; drag.current = null; }}
-            onPointerCancel={() => { suppressClick.current = true; drag.current = null; }}
+            onPointerUp={(event) => {
+              const pinching = pointers.current.size > 1;
+              pointers.current.delete(event.pointerId);
+              suppressClick.current = suppressClick.current || pinching || !!drag.current?.moved;
+              drag.current = null;
+            }}
+            onPointerCancel={(event) => { pointers.current.delete(event.pointerId); suppressClick.current = true; drag.current = null; }}
           />
         </div>
 

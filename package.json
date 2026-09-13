@@ -24,7 +24,8 @@
     "test:hokimiyat": "node tools/smoke/hokimiyat.mjs",
     "test:farxod": "node tools/smoke/farxod.mjs",
     "test:softex": "node tools/smoke/softex.mjs",
-    "test:xalqlar": "node tools/smoke/xalqlar.mjs"
+    "test:xalqlar": "node tools/smoke/xalqlar.mjs",
+    "test:mobile": "node tools/smoke/mobile.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.2",

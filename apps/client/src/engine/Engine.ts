@@ -53,7 +53,15 @@ export class Engine {
   private fpsAccumulator = 0;
   private fpsFrames = 0;
   private smoothedFps = 0;
-  private pixelRatio = Math.min(window.devicePixelRatio, 1.35);
+  /**
+   * Render aniqligining yuqori chegarasi. Telefonda ekran piksel zichligi 3 ga
+   * yetadi, GPU esa kompyuternikidan ancha zaif — 1 dan oshirish kadrni ikki
+   * barobar sekinlashtiradi, ko'zga esa deyarli sezilmaydi.
+   */
+  private readonly maxPixelRatio = Math.min(window.devicePixelRatio, window.matchMedia('(pointer: coarse)').matches ? 1 : 1.35);
+  /** Sekin qurilmada shu chegaragacha tushadi; telefonda pastroq. */
+  private readonly minPixelRatio = this.maxPixelRatio <= 1 ? .6 : .8;
+  private pixelRatio = this.maxPixelRatio;
   private slowSamples = 0;
   private fastSamples = 0;
 
@@ -128,8 +136,8 @@ export class Engine {
       if(this.smoothedFps<42){this.slowSamples++;this.fastSamples=0;}
       else if(this.smoothedFps>57){this.fastSamples++;this.slowSamples=0;}
       else {this.slowSamples=0;this.fastSamples=0;}
-      if(this.slowSamples>=3&&this.pixelRatio>.8){this.pixelRatio=Math.max(.8,this.pixelRatio-.12);this.renderer.setPixelRatio(this.pixelRatio);this.resize();this.slowSamples=0;}
-      if(this.fastSamples>=8&&this.pixelRatio<Math.min(window.devicePixelRatio,1.35)){this.pixelRatio=Math.min(window.devicePixelRatio,1.35,this.pixelRatio+.08);this.renderer.setPixelRatio(this.pixelRatio);this.resize();this.fastSamples=0;}
+      if(this.slowSamples>=3&&this.pixelRatio>this.minPixelRatio){this.pixelRatio=Math.max(this.minPixelRatio,this.pixelRatio-.12);this.renderer.setPixelRatio(this.pixelRatio);this.resize();this.slowSamples=0;}
+      if(this.fastSamples>=8&&this.pixelRatio<this.maxPixelRatio){this.pixelRatio=Math.min(this.maxPixelRatio,this.pixelRatio+.08);this.renderer.setPixelRatio(this.pixelRatio);this.resize();this.fastSamples=0;}
       this.fpsAccumulator = 0;
       this.fpsFrames = 0;
     }
