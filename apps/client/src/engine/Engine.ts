@@ -138,6 +138,10 @@ export class Engine {
       else if(this.smoothedFps>57){this.fastSamples++;this.slowSamples=0;}
       else {this.slowSamples=0;this.fastSamples=0;}
       if(this.slowSamples>=3&&this.pixelRatio>this.minPixelRatio){this.pixelRatio=Math.max(this.minPixelRatio,this.pixelRatio-.12);this.renderer.setPixelRatio(this.pixelRatio);this.resize();this.slowSamples=0;}
+      // Aniqlik pastki chegarada, kadr hamon sekin: oxirgi zaxira — soyalarni o'chirish.
+      // Materiallar bir marta qayta kompilyatsiya qilinadi; qaytarib yoqilmaydi, aks holda
+      // chegara atrofida har bir necha soniyada qotish takrorlanardi.
+      else if(this.slowSamples>=6&&this.renderer.shadowMap.enabled){this.renderer.shadowMap.enabled=false;this.scene.traverse(n=>{const m=(n as {material?:{needsUpdate:boolean}|Array<{needsUpdate:boolean}>}).material;if(m)for(const x of Array.isArray(m)?m:[m])x.needsUpdate=true;});this.slowSamples=0;}
       if(this.fastSamples>=8&&this.pixelRatio<this.maxPixelRatio){this.pixelRatio=Math.min(this.maxPixelRatio,this.pixelRatio+.08);this.renderer.setPixelRatio(this.pixelRatio);this.resize();this.fastSamples=0;}
       this.fpsAccumulator = 0;
       this.fpsFrames = 0;

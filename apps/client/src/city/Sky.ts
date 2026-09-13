@@ -288,7 +288,7 @@ export class Sky {
     // "yopishmay", suzib turgandek ko'rinadi.
     renderer.shadowMap.enabled = QUALITY.shadows;
     this.key.castShadow = QUALITY.shadows;
-    this.key.shadow.mapSize.set(2048, 2048);
+    this.key.shadow.mapSize.set(QUALITY.shadowMapSize, QUALITY.shadowMapSize);
     const camera = this.key.shadow.camera;
     camera.near = 1;
     camera.far = 1400;

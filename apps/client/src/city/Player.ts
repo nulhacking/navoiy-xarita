@@ -479,6 +479,11 @@ export class Player {
     const drowned = this.carFlood > 0.02;
     const floating = level !== null && this.carDepth > CAR_WADE_DEPTH;
 
+    // Piyoda paytida yerda qimirlamay turgan quruq mashina "uxlaydi": uning uchun
+    // kontroller, gravitatsiya va sahna so'rovlari har qadamda qayta hisoblanardi —
+    // telefonda o'yinchi yangilanishining katta qismi shu edi.
+    if (this.mode === 'walk' && this.carGrounded && Math.abs(this.carSpeed) < 0.01 && level === null && this.carFlood === 0) return;
+
     // Gaz va tormoz. Suvda kuch ham, eng katta tezlik ham kamayadi; motor
     // suvga to'lganda esa umuman ishlamaydi.
     const power = drowned ? 0 : 1 - 0.55 * wading;

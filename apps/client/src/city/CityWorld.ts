@@ -239,6 +239,8 @@ export class CityWorld {
     // Ariq o'yinchining suv zonalariga qo'shiladi: mashina undan sayoz
     // kechib o'tadi, chuqurroq havzalarda esa cho'kadi.
     this.ground.water.addZone(this.softex.drainRing,this.softex.drainLevel);
+    // Landmarklarning minglab mayda kolliderlari bitta trimesh'ga — `Physics.bakeStaticColliders`.
+    this.physics.bakeStaticColliders();
     // Yengil rejim: relyef va landmarklar arzon materialga (tayllar `loadTile` da).
     for (const object of [this.ground.mesh, this.lake?.group, this.hokimiyat.group, this.farxod.group, this.softex.group, this.xalqlar.group]) if (object) liteMaterials(object);
     this.ready = true;

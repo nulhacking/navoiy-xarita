@@ -13,6 +13,9 @@ import { vehicleSpec } from './FleetAssets.ts';
 import { Rider } from './Rider.ts';
 import { QUALITY } from './Quality.ts';
 
+/** `blocked()` indeksining katak o'lchami, metr. */
+const OBSTACLE_CELL = 50;
+
 interface Agent {
   object: Group;
   body: RAPIER.RigidBody;
@@ -45,6 +48,12 @@ export class Traffic {
   private cars = new RoadNetwork([]);
   private walks = new RoadNetwork([], true);
   private obstacles: Array<{ ring: Float32Array; minX: number; maxX: number; minZ: number; maxZ: number }> = [];
+  /**
+   * To'siqlarning 50 m lik katak indeksi. Har NPC har fizika qadamida `blocked()`
+   * so'raydi; 9 taylda 10 mingdan ortiq kontur bor va chiziqli qidiruv telefonda
+   * qadam vaqtining asosiy qismini olardi.
+   */
+  private obstacleGrid = new Map<string, number[]>();
   private seed = 47021;
   private spawnTimer = 0;
   private readonly water = new WaterZones();
@@ -70,10 +79,24 @@ export class Traffic {
       }
       return { ring, minX, maxX, minZ, maxZ };
     });
+    this.obstacleGrid.clear();
+    this.obstacles.forEach((o, index) => {
+      for (let cx = Math.floor(o.minX / OBSTACLE_CELL); cx <= Math.floor(o.maxX / OBSTACLE_CELL); cx++) {
+        for (let cz = Math.floor(o.minZ / OBSTACLE_CELL); cz <= Math.floor(o.maxZ / OBSTACLE_CELL); cz++) {
+          const key = `${cx},${cz}`, list = this.obstacleGrid.get(key);
+          if (list) list.push(index); else this.obstacleGrid.set(key, [index]);
+        }
+      }
+    });
   }
 
   private blocked(p: PointXZ): boolean {
-    return this.obstacles.some((o) => p.x >= o.minX && p.x <= o.maxX && p.z >= o.minZ && p.z <= o.maxZ && insidePolygon(p, o.ring));
+    const cell = this.obstacleGrid.get(`${Math.floor(p.x / OBSTACLE_CELL)},${Math.floor(p.z / OBSTACLE_CELL)}`);
+    if (!cell) return false;
+    return cell.some((index) => {
+      const o = this.obstacles[index]!;
+      return p.x >= o.minX && p.x <= o.maxX && p.z >= o.minZ && p.z <= o.maxZ && insidePolygon(p, o.ring);
+    });
   }
 
   get counts(): { cars: number; people: number } {
