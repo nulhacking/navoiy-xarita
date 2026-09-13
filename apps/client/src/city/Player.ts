@@ -287,7 +287,9 @@ export class Player {
 
     this.car = options.vehicleModel?.object ?? buildCarMesh();
     this.spec = vehicleSpec(this.car);
-    this.carFootOffset = options.vehicleModel ? CAR_HALF.y : 0;
+    // Model sport avtomobil bo'lmasligi mumkin (yengil rejimda sedan): kollayder shu transportniki.
+    this.carFootOffset = options.vehicleModel ? this.spec.half.y : 0;
+    if (options.vehicleModel) this.carCollider.setShape(new RAPIER.Cuboid(this.spec.half.x, this.spec.half.y, this.spec.half.z));
     this.group.add(this.car);
     if (options.characterModel) {
       this.rider = new Rider(options.characterModel);

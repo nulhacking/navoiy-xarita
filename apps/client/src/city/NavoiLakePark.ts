@@ -12,6 +12,7 @@ import { lakeWater } from './LakeWater.ts';
 import { buildParkFurniture, disposeCityDetails } from './CityDetails.ts';
 import { ParkLandmarks } from './ParkLandmarks.ts';
 import { groundTexture, parkPavingTexture } from './SurfaceMaterials.ts';
+import { QUALITY } from './Quality.ts';
 
 /** OSM shoreline + satellite-reference park reconstruction. No map-image plane.
  * Landmark footprints are approximate; dimensions/heights are authored estimates.
@@ -228,7 +229,7 @@ export class NavoiLakePark {
     const meshes=assetTrees(points,(x,z)=>this.ground.heightAt(x,z));
     if(meshes){
       // The park is a focal location: retain the leaf-textured assets across its courtyards.
-      for(const lod of meshes)if(lod.levels[1])lod.levels[1].distance=550;
+      for(const lod of meshes)if(lod.levels[1])lod.levels[1].distance=QUALITY.treeDetail(550);
       this.trees={meshes,count:points.length,sharedAssets:true};this.group.add(...meshes);
     }
     this.group.userData.treeCount=points.length;

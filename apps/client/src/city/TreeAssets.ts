@@ -1,6 +1,7 @@
 import { Box3, BufferAttribute, Color, ConeGeometry, CylinderGeometry, Group, IcosahedronGeometry, InstancedMesh, LOD, Matrix4, Mesh, MeshStandardMaterial, Quaternion, Vector3, type BufferGeometry, type Material } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { createGltfLoader } from './GltfLoader.ts';
+import { QUALITY } from './Quality.ts';
 let templates:Array<Array<{geometry:BufferGeometry;material:Material|Material[]}>>=[];
 export async function loadTreeAssets():Promise<void> {
   templates=await Promise.all(['tree-broad','tree-pine'].map(async file=>{
@@ -67,7 +68,7 @@ export function assetTrees(points:Array<{x:number;z:number;scale:number;shape:nu
     }
     if(distantParts.length){const geometry=mergeGeometries(distantParts)!;for(const part of distantParts)part.dispose();
       const mesh=new Mesh(geometry,distantMaterial);mesh.name='DistantTrees';mesh.userData.ownedTreeGeometry=true;low.add(mesh);}
-    lod.addLevel(high,0);lod.addLevel(low,300,.12);lods.push(lod);
+    lod.addLevel(high,0);lod.addLevel(low,QUALITY.treeDetail(300),.12);lods.push(lod);
   }
   return lods;
 }

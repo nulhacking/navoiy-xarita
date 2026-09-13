@@ -11,6 +11,7 @@ import { animateVehicle } from './VehicleRig.ts';
 import { TrafficSignals } from './TrafficSignals.ts';
 import { vehicleSpec } from './FleetAssets.ts';
 import { Rider } from './Rider.ts';
+import { QUALITY } from './Quality.ts';
 
 interface Agent {
   object: Group;
@@ -186,8 +187,8 @@ export class Traffic {
         if (Math.hypot(t.x - player.position.x, t.z - player.position.z) > 550 || agent.stalled > 20) this.remove(agent);
       }
       const counts = this.counts;
-      if (counts.cars < 6) this.spawn(false, player.position);
-      if (counts.people < 10) this.spawn(true, player.position);
+      if (counts.cars < QUALITY.maxCars) this.spawn(false, player.position);
+      if (counts.people < QUALITY.maxPeople) this.spawn(true, player.position);
     }
 
     for (const agent of this.agents) {

@@ -10,6 +10,7 @@ import { BigMap } from './BigMap.tsx';
 import { Hud } from './Hud.tsx';
 import { TouchControls } from './TouchControls.tsx';
 import { isTouchDevice } from './device.ts';
+import { QUALITY } from '../city/Quality.ts';
 
 /** UI ni har kadr yangilash isrofgarchilik — sekundiga 5 marta yetarli. */
 const HUD_INTERVAL = 0.2;
@@ -42,7 +43,7 @@ export function Viewport() {
       // Shahar masshtabida logarifmik depth kerak emas va u ba'zi GPU'larda
       // sekinroq — oddiy near/far yetarli.
       engine.camera.near = 0.2;
-      engine.camera.far = 6000;
+      engine.camera.far = QUALITY.cameraFar;
       engine.camera.updateProjectionMatrix();
 
       input = new Input(canvas);

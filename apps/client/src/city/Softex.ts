@@ -12,6 +12,7 @@ import { assetTrees } from './TreeAssets.ts';
 import { disposeTrees, type TreeMeshes } from './trees.ts';
 import { buildParkFurniture, disposeCityDetails } from './CityDetails.ts';
 import { parkPavingTexture } from './SurfaceMaterials.ts';
+import { QUALITY } from './Quality.ts';
 
 /**
  * Harf shakllari — belgilar qutisi 1 x 1 birlik, ichida to'rtburchaklar.
@@ -124,7 +125,7 @@ export class Softex {
     this.group.add(worldDetails);
     const meshes = assetTrees(treePoints, (x, z) => ground.heightAt(x, z));
     if (meshes) {
-      for (const lod of meshes) if (lod.levels[1]) lod.levels[1].distance = 520;
+      for (const lod of meshes) if (lod.levels[1]) lod.levels[1].distance = QUALITY.treeDetail(520);
       this.trees = { meshes, count: treePoints.length, sharedAssets: true };
       worldDetails.add(...meshes);
     }

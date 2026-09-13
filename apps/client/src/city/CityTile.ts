@@ -28,6 +28,7 @@ import { SOFTEX_IDS, softexTreeExclusion } from './SoftexReference.ts';
 import { buildCityDetails, disposeCityDetails, type BuildingDetail } from './CityDetails.ts';
 import { insidePolygon } from './RoadNetwork.ts';
 import { XD_BUILDING_IDS, xdAreaExclusion, xdRoadExclusion, xdTreeExclusion } from './XalqlarDostligiReference.ts';
+import { QUALITY } from './Quality.ts';
 
 /**
  * Yer ustidagi yassi qatlamlar: chuqurlik siljishi.
@@ -311,7 +312,10 @@ export class CityTile {
     this.stats = { buildings: data.buildings.length, triangles: Math.round(triangles) };
   }
 
+  get bounds(): { minX: number; maxX: number; minZ: number; maxZ: number } { return this.detailContext.bounds; }
+
   updateDetails(focus:{x:number;z:number}):void {
+    if(!QUALITY.buildingDetails)return;
     if(Math.hypot(focus.x-this.detailFocus.x,focus.z-this.detailFocus.z)<100)return;
     this.detailFocus={x:focus.x,z:focus.z};
     if(this.details){this.group.remove(this.details);disposeCityDetails(this.details);}

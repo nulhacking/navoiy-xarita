@@ -731,3 +731,9 @@ body.touch .bigmap-panel {
 .touch-btn:disabled {
   opacity: 0.35;
 }
+
+.quality-toggle {
+  margin-top: 5px;
+  background: rgba(40, 44, 60, 0.6);
+  border-color: rgba(255, 255, 255, 0.14);
+}

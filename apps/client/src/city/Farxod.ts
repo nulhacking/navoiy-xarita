@@ -11,6 +11,7 @@ import { assetTrees } from './TreeAssets.ts';
 import { disposeTrees, type TreeMeshes } from './trees.ts';
 import { buildParkFurniture, disposeCityDetails } from './CityDetails.ts';
 import { parkPavingTexture } from './SurfaceMaterials.ts';
+import { QUALITY } from './Quality.ts';
 
 /** Ayvon chuqurligi va balandligi — fotosuratdagi ustunlar qatoridan. */
 const ARCADE_DEPTH = 3.6, ARCADE_HEIGHT = 7.2;
@@ -103,7 +104,7 @@ export class Farxod {
     world.position.copy(this.group.position).negate().applyQuaternion(this.group.quaternion.clone().invert());
     world.quaternion.copy(this.group.quaternion).invert(); this.group.add(world);
     const meshes = assetTrees(treePoints, (x, z) => ground.heightAt(x, z));
-    if (meshes) { for (const lod of meshes) if (lod.levels[1]) lod.levels[1].distance = 600; this.trees = { meshes, count: treePoints.length, sharedAssets: true }; world.add(...meshes); }
+    if (meshes) { for (const lod of meshes) if (lod.levels[1]) lod.levels[1].distance = QUALITY.treeDetail(600); this.trees = { meshes, count: treePoints.length, sharedAssets: true }; world.add(...meshes); }
 
     // Maydon ichidagi chiroqlar. Shoh ko'cha trotuaridagilar `XalqlarDostligi` da.
     const lamps: Array<{ x: number; z: number; yaw: number }> = [];

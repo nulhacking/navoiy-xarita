@@ -15,6 +15,7 @@ import {
 } from 'three';
 
 import { horizontalToLocal, moonPosition, sunPosition, type MoonPosition } from '@xarita/geo';
+import { QUALITY } from './Quality.ts';
 
 /** Soya kamerasi qamrab oladigan yarim en, metr. */
 const SHADOW_EXTENT = 180;
@@ -49,8 +50,8 @@ const SUN_LOW = new Color(0xff9a4d);
 const MOON_COLOR = new Color(0xaec4e8);
 
 /** Yer sathidagi tuman rangi ufq bilan bir xil — chegara sezilmasligi uchun. */
-const FOG_NEAR = 350;
-const FOG_FAR = 2400;
+const FOG_NEAR = QUALITY.fogNear;
+const FOG_FAR = QUALITY.fogFar;
 
 /** Osmon yorug'ligi (hemisphere) kunduzi va tunda. */
 const DAY_SKY = new Color(0xc6d9ed);
@@ -285,8 +286,8 @@ export class Sky {
 
     // Soyalar realistiklikning eng katta bitta hissasi: usiz binolar yerga
     // "yopishmay", suzib turgandek ko'rinadi.
-    renderer.shadowMap.enabled = true;
-    this.key.castShadow = true;
+    renderer.shadowMap.enabled = QUALITY.shadows;
+    this.key.castShadow = QUALITY.shadows;
     this.key.shadow.mapSize.set(2048, 2048);
     const camera = this.key.shadow.camera;
     camera.near = 1;

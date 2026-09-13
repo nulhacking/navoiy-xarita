@@ -1,3 +1,4 @@
+import { QUALITY } from './Quality.ts';
 import {
   BoxGeometry, BufferAttribute, BufferGeometry, CylinderGeometry, DoubleSide, Group, IcosahedronGeometry, Mesh,
   MeshStandardMaterial, OctahedronGeometry, Points, PointsMaterial, Quaternion, ShapeUtils, SphereGeometry,
@@ -339,7 +340,7 @@ export class XalqlarDostligi {
     world.quaternion.copy(this.main.group.quaternion).invert();
     const meshes = assetTrees(this.treePoints, (x, z) => ground.heightAt(x, z));
     if (meshes) {
-      for (const lod of meshes) if (lod.levels[1]) lod.levels[1].distance = 520;
+      for (const lod of meshes) if (lod.levels[1]) lod.levels[1].distance = QUALITY.treeDetail(520);
       this.trees = { meshes, count: this.treePoints.length, sharedAssets: true };
       world.add(...meshes);
     }
@@ -707,6 +708,7 @@ export class XalqlarDostligi {
       s.box(hu, top - .75, p.v, .45, 1.25, .35, 'dark');
       (['red', 'amber', 'green'] as const).forEach((colour, i) => {
         const m = new MeshStandardMaterial({ color: 0x141719, roughness: .4 });
+        m.userData.dynamic = true;
         const key = `signal-${p.u.toFixed(1)}-${p.v}-${colour}`;
         this.materials[key] = m;
         this.signalHeads.push({ material: m, colour, offset: p.offset });

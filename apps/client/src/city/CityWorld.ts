@@ -34,6 +34,8 @@ import { Hokimiyat } from './Hokimiyat.ts';
 import { Farxod } from './Farxod.ts';
 import { Softex } from './Softex.ts';
 import { XalqlarDostligi } from './XalqlarDostligi.ts';
+import { liteMaterials } from './LiteMaterials.ts';
+import { LOW_QUALITY, QUALITY } from './Quality.ts';
 
 /** Geometriya yuklanadigan radius, tayl birligida (z14 tayl ≈ 1.9 km). */
 // Fog 2.4 km dan keyin sahnani yopadi; 5x5 tayl GPUga ortiqcha yuk edi.
@@ -171,7 +173,9 @@ export class CityWorld {
         this.onError?.(`Personaj modeli yuklanmadi: ${(error as Error).message}`);
         return null;
       }),
-      loadVehicle().catch((error: unknown) => {
+      // Sport avtomobil (CarConcept) bitta o'zi ~1 mln uchburchak va 175 draw call —
+      // butun shahar kadridan og'ir. Yengil rejimda u umuman yuklanmaydi.
+      (LOW_QUALITY ? Promise.resolve(null) : loadVehicle()).catch((error: unknown) => {
         this.onError?.(`Mashina modeli yuklanmadi: ${(error as Error).message}`);
         return null;
       }),
@@ -195,7 +199,8 @@ export class CityWorld {
       camera: this.engine.camera,
       spawn,
       ...(character ? { characterModel: cloneModel(character) satisfies LoadedModel } : {}),
-      ...(vehicle ? { vehicleModel: cloneModel(vehicle) satisfies LoadedModel } : {}),
+      ...(vehicle ? { vehicleModel: cloneModel(vehicle) satisfies LoadedModel }
+        : fleet[0] ? { vehicleModel: cloneModel(fleet[0]) satisfies LoadedModel } : {}),
       trafficVehicleDistance: (position,radius) => {
         const d=Math.min(this.traffic?.nearestVehicleDistance(position,radius)??Infinity,this.parked?.nearestDistance(position,radius)??Infinity);
         return Number.isFinite(d)?d:null;
@@ -234,6 +239,8 @@ export class CityWorld {
     // Ariq o'yinchining suv zonalariga qo'shiladi: mashina undan sayoz
     // kechib o'tadi, chuqurroq havzalarda esa cho'kadi.
     this.ground.water.addZone(this.softex.drainRing,this.softex.drainLevel);
+    // Yengil rejim: relyef va landmarklar arzon materialga (tayllar `loadTile` da).
+    for (const object of [this.ground.mesh, this.lake?.group, this.hokimiyat.group, this.farxod.group, this.softex.group, this.xalqlar.group]) if (object) liteMaterials(object);
     this.ready = true;
   }
 
@@ -268,12 +275,30 @@ export class CityWorld {
       this.xalqlar?.update(this.paused?0:ctx.dt,1-this.currentSky.daylight);
     }
 
+    this.cullTiles(position);
+
     this.selectTimer += ctx.dt;
     if (this.selectTimer >= 1 / SELECT_HZ && !this.teleporting) {
       this.selectTimer = 0;
       void this.select(false);
     }
   };
+
+  /**
+   * Yengil rejimda uzoqdagi tayllar chizilmaydi. Tayl meshi butun 2 km lik
+   * taylni bitta chizish chaqiruvida qoplaydi, shuning uchun kamera frustumi
+   * uni hech qachon o'zi kesmaydi — masofani qo'lda tekshiramiz. Fizika va
+   * mini-xarita ma'lumoti joyida qoladi.
+   */
+  private cullTiles(position: { x: number; z: number }): void {
+    if (!Number.isFinite(QUALITY.tileViewDistance)) return;
+    for (const tile of this.tiles.values()) {
+      const b = tile.bounds;
+      const dx = Math.max(b.minX - position.x, 0, position.x - b.maxX);
+      const dz = Math.max(b.minZ - position.z, 0, position.z - b.maxZ);
+      tile.group.visible = Math.hypot(dx, dz) < QUALITY.tileViewDistance;
+    }
+  }
 
   /** Osmonning hozirgi holati — HUD soati shundan o'qiydi. */
   get skyState(): SkyState | null {
@@ -494,6 +519,7 @@ export class CityWorld {
       const data = await this.osm.get(coord);
       if (this.disposed || !this.wantedTiles.has(key) || !data || !this.frame || !this.ground) return;
       const tile = new CityTile(coord, data, this.frame, this.ground);
+      liteMaterials(tile.group, true);
       this.tiles.set(key, tile);
       this.group.add(tile.group);
       this.mapsDirty = true;

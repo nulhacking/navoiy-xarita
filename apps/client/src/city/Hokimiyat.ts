@@ -9,6 +9,7 @@ import { assetTrees } from './TreeAssets.ts';
 import { disposeTrees, type TreeMeshes } from './trees.ts';
 import { buildParkFurniture, disposeCityDetails } from './CityDetails.ts';
 import { parkPavingTexture } from './SurfaceMaterials.ts';
+import { QUALITY } from './Quality.ts';
 
 /** Photo-led facade and satellite/OSM-led site. Decorative dimensions are authored estimates. */
 export class Hokimiyat {
@@ -52,7 +53,7 @@ export class Hokimiyat {
     worldDetails.position.copy(this.group.position).negate().applyQuaternion(this.group.quaternion.clone().invert());
     worldDetails.quaternion.copy(this.group.quaternion).invert();this.group.add(worldDetails);
     const meshes=assetTrees(treePoints,(x,z)=>ground.heightAt(x,z));
-    if(meshes){for(const lod of meshes)if(lod.levels[1])lod.levels[1].distance=600;this.trees={meshes,count:treePoints.length,sharedAssets:true};worldDetails.add(...meshes);}
+    if(meshes){for(const lod of meshes)if(lod.levels[1])lod.levels[1].distance=QUALITY.treeDetail(600);this.trees={meshes,count:treePoints.length,sharedAssets:true};worldDetails.add(...meshes);}
     const lamps=Array.from({length:12},(_,i)=>{const p=this.basis.point(i<6?33:-59,20+(i%6)*25);return{x:p.x,z:p.z,yaw:this.group.rotation.y};});
     this.furniture=buildParkFurniture(lamps,ground);worldDetails.add(this.furniture);
     const geometry=new BufferGeometry();geometry.setAttribute('position',new BufferAttribute(new Float32Array(360*3),3));

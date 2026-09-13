@@ -17,9 +17,10 @@ import type { CityMapData } from './CityTile.ts';
 import type { Ground } from './Ground.ts';
 import { insidePolygon } from './RoadNetwork.ts';
 import { assetTrees } from './TreeAssets.ts';
+import { QUALITY } from './Quality.ts';
 
 /** Bitta taylda eng ko'p shuncha daraxt. LOD tizimi 300m dan uzoqni yengil meshga aylantiradi. */
-const MAX_TREES = 2400;
+const MAX_TREES = QUALITY.maxTreesPerTile;
 
 /** Ko'cha bo'ylab daraxtlar orasidagi masofa, metr. */
 const STREET_SPACING = 11;

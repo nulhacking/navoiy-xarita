@@ -40,6 +40,10 @@ try {
     help: document.querySelector('.help') ? getComputedStyle(document.querySelector('.help')).display : 'none',
     buttons: [...document.querySelectorAll('.touch-btn')].map((b) => b.textContent),
     clockCollapsed: document.querySelector('.clock')?.classList.contains('collapsed'),
+    shadows: window.__xarita.engine.renderer.shadowMap.enabled,
+    quality: (window.__xarita.engine.renderer.getContextAttributes()?.antialias ? 'yuqori' : 'yengil'),
+    frame: (() => { const { engine } = window.__xarita, r = engine.renderer; r.info.autoReset = false; r.info.reset(); r.render(engine.scene, engine.camera); const out = { calls: r.info.render.calls, triangles: r.info.render.triangles }; r.info.autoReset = true; return out; })(),
+    lambert: (() => { let lite = 0, pbr = 0; window.__xarita.engine.scene.traverse((n) => { if (!n.isMesh) return; for (const m of [n.material].flat()) { if (m.isMeshLambertMaterial) lite++; else if (m.isMeshStandardMaterial) pbr++; } }); return { lite, pbr }; })(),
   }));
 
   // 1. Joystikni yuqoriga suramiz — personaj oldinga yurishi kerak.
@@ -104,6 +108,8 @@ try {
   assert.ok(layout.pixelRatio <= 1, 'phone render resolution must be capped');
   assert.equal(layout.help, 'none', 'keyboard help must be hidden on phones');
   assert.ok(layout.clockCollapsed, 'menu starts collapsed on phones');
+  assert.ok(!layout.shadows && layout.quality.includes('yengil'), 'phones start in the light graphics profile');
+  assert.ok(layout.lambert.lite > layout.lambert.pbr, 'light profile swaps most PBR materials');
   assert.ok(axisWhileHeld.y > .8, `joystick forward axis ${axisWhileHeld.y}`);
   assert.ok(walked > 2, `joystick must move the player (${walked.toFixed(2)} m)`);
   assert.equal(Math.hypot(axisReleased.x, axisReleased.y), 0, 'releasing the stick stops movement');

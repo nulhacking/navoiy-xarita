@@ -1,3 +1,4 @@
+import { QUALITY } from '../city/Quality.ts';
 import {
   ACESFilmicToneMapping,
   Clock,
@@ -58,9 +59,9 @@ export class Engine {
    * yetadi, GPU esa kompyuternikidan ancha zaif — 1 dan oshirish kadrni ikki
    * barobar sekinlashtiradi, ko'zga esa deyarli sezilmaydi.
    */
-  private readonly maxPixelRatio = Math.min(window.devicePixelRatio, window.matchMedia('(pointer: coarse)').matches ? 1 : 1.35);
+  private readonly maxPixelRatio = Math.min(window.devicePixelRatio, QUALITY.maxPixelRatio);
   /** Sekin qurilmada shu chegaragacha tushadi; telefonda pastroq. */
-  private readonly minPixelRatio = this.maxPixelRatio <= 1 ? .6 : .8;
+  private readonly minPixelRatio = Math.min(this.maxPixelRatio, QUALITY.minPixelRatio);
   private pixelRatio = this.maxPixelRatio;
   private slowSamples = 0;
   private fastSamples = 0;
@@ -70,7 +71,7 @@ export class Engine {
 
     this.renderer = new WebGLRenderer({
       canvas,
-      antialias: true,
+      antialias: QUALITY.antialias,
       // City-scale near/far works with standard depth and early depth testing.
       logarithmicDepthBuffer: false,
       powerPreference: 'high-performance',

@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useAppStore } from '../state/store.ts';
 import { MODEL_ATTRIBUTION } from '../city/models.ts';
 import { isTouchDevice } from './device.ts';
+import { QUALITY_LEVEL, setQuality } from '../city/Quality.ts';
 
 /** Navoiy o'yin rejimi uchun HUD. */
 export function Hud({
@@ -174,6 +175,14 @@ function Clock({ setCityHour, resetClock, visitLake, visitHokimiyat, visitFarxod
               {visitingXalqlar ? 'Yuklanmoqda…' : "⌖ Xalqlar Do'stligi shoh ko'chasi"}
             </button>
           </div>
+          <button
+            type="button"
+            className="lake-visit quality-toggle"
+            title="Sahifa qayta yuklanadi"
+            onClick={() => setQuality(QUALITY_LEVEL === 'low' ? 'high' : 'low')}
+          >
+            {QUALITY_LEVEL === 'low' ? '⚙ Grafika: yengil → yuqoriga o‘tish' : '⚙ Grafika: yuqori → yengilga o‘tish'}
+          </button>
         </>
       )}
     </div>
