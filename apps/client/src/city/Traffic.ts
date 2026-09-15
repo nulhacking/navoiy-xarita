@@ -1,4 +1,4 @@
-import { AnimationMixer, Group, Mesh, MeshStandardMaterial, SkinnedMesh, Vector3, type AnimationAction, type Skeleton, type Material } from 'three';
+import { AnimationMixer, Group, Mesh, MeshStandardMaterial, Quaternion, SkinnedMesh, Vector3, type AnimationAction, type Skeleton, type Material } from 'three';
 import type { Ground } from './Ground.ts';
 import type { CityMapData } from './CityTile.ts';
 import { alignCharacterFeet, cloneModel, type LoadedModel } from './models.ts';
@@ -50,7 +50,33 @@ interface Agent {
   previousYaw: number;
   /** Piyodaning yo'lakdan yon tomonga chetlanishi, metr (odamni aylanib o'tish uchun). */
   sidestep: number;
+  /** Transport haydovchisining modeli — mashina olib qo'yilganda piyoda bo'lib tushadi. */
+  riderTemplate: LoadedModel | null;
+  /** Yo'lakka qaytishdan oldin o'tiladigan nuqtalar (mashinani aylanib o'tish). */
+  waypoints: PointXZ[];
+  /** Klonlangan model — urilgan piyoda o'rnidan turganda o'sha qiyofada qayta yaratiladi. */
+  template: LoadedModel;
 }
+
+/**
+ * Urib yuborilgan NPC:
+ *  - `flying`: dinamik jism, uchadi va yerga tushadi;
+ *  - `rising`: piyoda tinchlangach o'rnidan turadi, keyin yana yuradi;
+ *  - `settled`: mashina tinchlangach qo'zg'almas to'siq bo'lib qoladi.
+ */
+interface Knocked {
+  agent: Agent;
+  body: RAPIER.RigidBody | null;
+  lift: number;
+  age: number;
+  /** Jism qancha vaqtdan beri deyarli qimirlamayapti, sekund. */
+  rest: number;
+  phase: 'flying' | 'rising' | 'settled';
+  rise: { t: number; fromPosition: Vector3; fromRotation: Quaternion; to: Vector3; toRotation: Quaternion; yaw: number } | null;
+}
+
+/** O'rnidan turish davomiyligi, sekund. */
+const RISE_TIME = 0.9;
 
 /** Piyoda odamni aylanib o'tishda shuncha yon tomonga chiqadi, metr. */
 const SIDESTEP = 1.15;
@@ -70,10 +96,10 @@ export class Traffic {
   private obstacleGrid = new Map<string, number[]>();
   /**
    * O'yinchi mashinasi urib yuborgan NPC'lar: kinematik boshqaruvdan olinib, haqiqiy
-   * dinamik jismga aylanadi (odam uchib ketadi, mashina surilib aylanadi) va bir necha
-   * soniyadan keyin yo'qoladi. Ro'yxat kichik — faqat urilganlar.
+   * dinamik jismga aylanadi (odam uchib ketadi, mashina surilib aylanadi). Tinchlangach
+   * odam o'rnidan turadi, mashina joyida qoladi (`Knocked`). Ro'yxat kichik — faqat urilganlar.
    */
-  private knocked: Array<{ agent: Agent; body: RAPIER.RigidBody; lift: number; age: number }> = [];
+  private knocked: Knocked[] = [];
   /** Oxirgi qadamda urilgan NPC'larning jami massasi — o'yinchi mashinasi shunga sekinlashadi. */
   private impactMass = 0;
   private seed = 47021;
@@ -152,7 +178,10 @@ export class Traffic {
     if(!nearest) return null;
     const t=nearest.body.translation();
     const result={position:new Vector3(t.x,t.y,t.z),yaw:nearest.yaw,speed:nearest.speed,object:nearest.object};
+    const driver=nearest.riderTemplate, half=vehicleSpec(nearest.object).half;
     this.remove(nearest,true);
+    // Kollayder olib tashlangach: eshik joyi mashinaning o'zi bilan "band" chiqmasin.
+    if(driver){this.physics.world.updateSceneQueries();this.ejectDriver(driver,t,result.yaw,half,point);}
     return result;
   }
 
@@ -176,6 +205,16 @@ export class Traffic {
       const range = Math.hypot(p.x - player.x, p.z - player.z);
       if (range < 18 || range > 330 || this.blocked(p)) continue;
       if (this.agents.some((a) => { const t = a.body.translation(); return Math.hypot(t.x - p.x, t.z - p.z) < 12; })) continue;
+      if (this.createAgent(template, pedestrian, edge, distance, p, Math.atan2(edge.b.x - edge.a.x, edge.b.z - edge.a.z))) return;
+    }
+  }
+
+  /**
+   * NPC yaratadi. Joy band bo'lsa (devor, boshqa jism) `null`.
+   * @param rider Transport haydovchisi; berilmasa tasodifiy personaj tanlanadi.
+   */
+  private createAgent(template: LoadedModel, pedestrian: boolean, edge: RoadEdge, distance: number, p: PointXZ, yaw: number, rider?: LoadedModel): Agent | null {
+    {
       const model = cloneModel(template);
       const ownedMaterials: Material[] = [];
       if (!pedestrian) {
@@ -193,11 +232,10 @@ export class Traffic {
       const halfHeight = pedestrian ? 0.9 : half.y;
       const position = { x: p.x, y: this.ground.heightAt(p.x, p.z) + halfHeight + 0.12, z: p.z };
       const shape = pedestrian ? new RAPIER.Capsule(0.55, 0.35) : new RAPIER.Cuboid(half.x, half.y, half.z);
-      const yaw = Math.atan2(edge.b.x - edge.a.x, edge.b.z - edge.a.z);
       const rotation = { x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) };
       if (this.physics.world.intersectionWithShape(position, rotation, shape)) {
         for (const material of ownedMaterials) material.dispose();
-        continue;
+        return null;
       }
       const body = this.physics.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(position.x, position.y, position.z).setRotation(rotation));
       const collider = this.physics.world.createCollider(pedestrian ? RAPIER.ColliderDesc.capsule(0.55, 0.35) : RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z), body);
@@ -215,26 +253,92 @@ export class Traffic {
       model.object.position.set(position.x, position.y - halfHeight, position.z);
       model.object.rotation.y = yaw;
       this.group.add(model.object);
-      const rider=!pedestrian&&this.characters.length?new Rider(this.characters[Math.floor(this.random()*this.characters.length)]!):null;
-      if(rider){model.object.add(rider.object);rider.pose(spec);}
+      const riderTemplate=pedestrian?null:rider??this.characters[Math.floor(this.random()*this.characters.length)]??null;
+      const riderModel=riderTemplate?new Rider(riderTemplate):null;
+      if(riderModel){model.object.add(riderModel.object);riderModel.pose(spec);}
       let walkSpeed=1.7;model.object.traverse(n=>{if(n.userData.walkSpeed>0)walkSpeed=n.userData.walkSpeed;});
-      this.agents.push({ object: model.object, body, collider, controller, mixer, walkAction, idleAction, blend: 0, pedestrian, edge, distance, animationElapsed:0,distanceSquared:0,walkSpeed,footPlant:pedestrian?new FootPlant(model.object):null,
-        previous: new Vector3(position.x, position.y, position.z), previousYaw: yaw, sidestep: 0,
-        speed: 0, cruise: pedestrian ? 1.65 + this.random() * 0.55 : Math.min(spec.maxSpeed*.7,9 + this.random() * 6), vertical: 0, grounded: false, stalled: 0, nextEdge: null, ownedMaterials, steering: 0, yaw, rider });
-      return;
+      const agent: Agent = { object: model.object, body, collider, controller, mixer, walkAction, idleAction, blend: 0, pedestrian, edge, distance, animationElapsed:0,distanceSquared:0,walkSpeed,footPlant:pedestrian?new FootPlant(model.object):null,
+        previous: new Vector3(position.x, position.y, position.z), previousYaw: yaw, sidestep: 0, riderTemplate, waypoints: [], template,
+        speed: 0, cruise: pedestrian ? 1.65 + this.random() * 0.55 : Math.min(spec.maxSpeed*.7,9 + this.random() * 6), vertical: 0, grounded: false, stalled: 0, nextEdge: null, ownedMaterials, steering: 0, yaw, rider: riderModel };
+      this.agents.push(agent);
+      return agent;
+    }
+  }
+
+  /**
+   * O'yinchi olib qo'ygan transportning haydovchisi yo'qolmaydi: eshik
+   * yonida piyoda bo'lib tushadi va eng yaqin yo'lakka qarab yurib ketadi.
+   * Eshik o'yinchidan NARIGI tomondan tanlanadi: aks holda haydovchi va eshikka
+   * kelayotgan o'yinchi bir-birini to'sib qolardi. U band bo'lsa (devor) —
+   * boshqa tomon yoki orqa.
+   */
+  private ejectDriver(template: LoadedModel, position: PointXZ, yaw: number, half: { x: number; z: number }, player: PointXZ): void {
+    let edge: RoadEdge | null = null, best = 40;
+    for (const candidate of this.walks.nearby(position, 40)) {
+      const nearest = projectToEdge(candidate, position), gap = Math.hypot(nearest.x - position.x, nearest.z - position.z);
+      if (gap < best) { best = gap; edge = candidate; }
+    }
+    if (!edge) return;
+    const distance = projectToEdge(edge, position).distance;
+    const sidewalk = lanePoint(edge, distance, true);
+    // Mahalliy (x, z) → dunyo; o'yinchi eshigi bilan bir xil formula (`Player.enterCar`).
+    const c = Math.cos(yaw), s = Math.sin(yaw);
+    const world = (x: number, z: number) => ({ x: position.x + c * x + s * z, z: position.z - s * x + c * z });
+    const door = half.x + 0.75;
+    const exits = [world(door, 0.3), world(-door, 0.3)]
+      .sort((a, b) => Math.hypot(b.x - player.x, b.z - player.z) - Math.hypot(a.x - player.x, a.z - player.z));
+    exits.push(world(0, -half.z - 1));
+    const localX = (p: PointXZ) => c * (p.x - position.x) - s * (p.z - position.z);
+    const along = (p: PointXZ) => projectToEdge(edge!, p).distance;
+    for (const exit of exits) {
+      if (this.blocked(exit)) continue;
+      // Yo'lak mashinaning narigi tomonida bo'lsa, to'g'ri yursa korpusga tiralib
+      // qoladi: avval yo'l bo'ylab OLDINDAGI burchakni aylanib o'tadi, yo'lak
+      // nuqtasi ham o'sha burchak ro'parasidan olinadi.
+      const waypoints: PointXZ[] = [];
+      let start = distance;
+      const exitX = localX(exit);
+      if (Math.abs(exitX) > 0.5 && Math.sign(exitX) !== Math.sign(localX(sidewalk))) {
+        const outward = Math.sign(exitX) * (half.x + 1.1);
+        const corners = [world(outward, half.z + 1.4), world(outward, -half.z - 1.4)];
+        const corner = along(corners[0]!) >= along(corners[1]!) ? corners[0]! : corners[1]!;
+        if (!this.blocked(corner)) { waypoints.push(corner); start = Math.min(edge.length - 0.1, along(corner) + 1.5); }
+      }
+      const facing = Math.atan2((waypoints[0] ?? sidewalk).x - exit.x, (waypoints[0] ?? sidewalk).z - exit.z);
+      const agent = this.createAgent(template, true, edge, start, exit, facing);
+      if (agent) { agent.waypoints = waypoints; return; }
     }
   }
 
   update(dt: number, player: PlayerState): void {
     this.signals.update(dt,player.position);
     this.hitByPlayer(player);
+    // Urilganlar yo'qolmaydi: odam o'rnidan turib yana yuradi, mashina joyida
+    // qoladi. Faqat o'yinchi uzoqlashsa — boshqa NPC'lar kabi — olib tashlanadi.
     for (let i = this.knocked.length - 1; i >= 0; i--) {
       const k = this.knocked[i]!;
       k.age += dt;
-      if (k.age < 8) continue;
-      this.physics.world.removeRigidBody(k.body);
-      this.remove(k.agent, false, true);
-      this.knocked.splice(i, 1);
+      if (k.body && k.phase === 'flying') {
+        // Uchish ~1 s davom etadi. Keyin gavda kapsula bo'lgani uchun yerda
+        // sekundlab dumalardi va o'rnidan turish 7 s ga cho'zilardi — so'nish kuchayadi.
+        if (k.agent.pedestrian && k.age > 1.2 && k.age - dt <= 1.2) { k.body.setLinearDamping(2.5); k.body.setAngularDamping(4); }
+        const v = k.body.linvel(), w = k.body.angvel();
+        k.rest = Math.hypot(v.x, v.y, v.z) < 0.35 && Math.hypot(w.x, w.y, w.z) < 0.6 ? k.rest + dt : 0;
+        if ((k.age > 2 && k.rest > 0.8) || k.age > 7) {
+          if (k.agent.pedestrian) this.beginRise(k);
+          else this.settleCar(k, player.position);
+        }
+      } else if (k.phase === 'rising' && k.rise) {
+        k.rise.t += dt;
+        // Joy band bo'lsa (ustida mashina turibdi) keyingi qadamda yana urinadi.
+        if (k.rise.t >= RISE_TIME && this.standUp(k)) { this.knocked.splice(i, 1); continue; }
+      }
+      const p = k.body?.translation() ?? k.rise?.to;
+      if (p && Math.hypot(p.x - player.position.x, p.z - player.position.z) > 550) {
+        if (k.body) this.physics.world.removeRigidBody(k.body);
+        this.remove(k.agent, false, true);
+        this.knocked.splice(i, 1);
+      }
     }
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0) {
@@ -281,8 +385,12 @@ export class Traffic {
         avoid = Math.max(-1.5, Math.min(1.5, avoid));
       }
       agent.sidestep = approach(agent.sidestep, avoid, avoid ? 1.4 : 0.8, dt);
-      const vehicles: PointXZ[] = [player.carPosition];
-      for (const other of this.agents) if (!other.pedestrian) vehicles.push(other.body.translation());
+      // Yo'l nuqtasi bo'ylab ketayotgan piyoda (mashinadan tushgan haydovchi)
+      // mashina yonidan aylanib o'tadi — uning oldida tormoz bersa, joyida qolardi.
+      const vehicles: PointXZ[] = agent.waypoints.length ? [] : [player.carPosition];
+      if (!agent.waypoints.length) {
+        for (const other of this.agents) if (!other.pedestrian) vehicles.push(other.body.translation());
+      }
       for (const obstacle of vehicles) {
         const ox = obstacle.x - t.x, oz = obstacle.z - t.z;
         const ahead = ox * dx + oz * dz;
@@ -305,6 +413,8 @@ export class Traffic {
       const ex = (edge.b.x - edge.a.x) / edge.length, ez = (edge.b.z - edge.a.z) / edge.length;
       target.x -= ez * agent.sidestep;
       target.z += ex * agent.sidestep;
+      const waypoint = agent.waypoints[0];
+      if (waypoint) { target.x = waypoint.x; target.z = waypoint.z; }
       const deltaX = target.x - t.x, deltaZ = target.z - t.z;
       const distance = Math.hypot(deltaX, deltaZ);
       // Chetlanish paytida yo'l diagonal bo'ladi — ortda qolmaslik uchun biroz tezroq yetib oladi.
@@ -333,8 +443,14 @@ export class Traffic {
       }
       if (actual < travel * 0.4 || travel < 0.0001) agent.stalled += dt;
       else agent.stalled = 0;
-      // Advance the route only when the collider really follows it (no tunnelling).
-      if (distance < 0.5 + travel && actual >= travel * 0.4) {
+      if (waypoint) {
+        // Nuqtaga yetdi yoki unga o'tib bo'lmaydi — keyingisiga (oxiri — yo'lak).
+        if (Math.hypot(t.x + movement.x - waypoint.x, t.z + movement.z - waypoint.z) < 0.5 || agent.stalled > 1.5) {
+          agent.waypoints.shift();
+          agent.stalled = 0;
+        }
+      } else if (distance < 0.5 + travel && actual >= travel * 0.4) {
+        // Advance the route only when the collider really follows it (no tunnelling).
         if (agent.edge !== edge) agent.nextEdge = null;
         agent.edge = edge;
         agent.distance = nextDistance;
@@ -417,7 +533,15 @@ export class Traffic {
   }
 
   render(alpha = 1, dt = 0): void {
-    for (const { agent, body, lift } of this.knocked) {
+    for (const { agent, body, lift, rise } of this.knocked) {
+      if (!body) {
+        if (!rise) continue;
+        // Yotgan holatdan tik holatga silliq ko'tariladi (turish klipi yo'q).
+        const s = Math.min(1, rise.t / RISE_TIME), smooth = s * s * (3 - 2 * s);
+        agent.object.position.lerpVectors(rise.fromPosition, rise.to, smooth);
+        agent.object.quaternion.slerpQuaternions(rise.fromRotation, rise.toRotation, smooth);
+        continue;
+      }
       const t = body.translation(), r = body.rotation();
       agent.object.quaternion.set(r.x, r.y, r.z, r.w);
       // Jism markazi gavda o'rtasida; model esa oyoq/g'ildirak sathidan boshlanadi.
@@ -489,7 +613,47 @@ export class Traffic {
       ? { x: uz * mass * speed * .35, y: spin * mass * .6, z: -ux * mass * speed * .35 }
       : { x: 0, y: spin * mass * speed * .45, z: 0 }, true);
     this.impactMass += agent.pedestrian ? mass * .5 : mass;
-    this.knocked.push({ agent, body, lift, age: 0 });
+    this.knocked.push({ agent, body, lift, age: 0, rest: 0, phase: 'flying', rise: null });
+  }
+
+  /** Tinchlangan piyoda: dinamik jism olib tashlanadi, o'rnidan turish boshlanadi. */
+  private beginRise(k: Knocked): void {
+    const body = k.body!, t = body.translation();
+    const fromRotation = k.agent.object.quaternion.clone();
+    const forward = new Vector3(0, 0, 1).applyQuaternion(fromRotation);
+    const yaw = Math.hypot(forward.x, forward.z) > 0.1 ? Math.atan2(forward.x, forward.z) : k.agent.yaw;
+    this.physics.world.removeRigidBody(body);
+    k.body = null;
+    k.phase = 'rising';
+    k.rise = {
+      t: 0, yaw, fromPosition: k.agent.object.position.clone(), fromRotation,
+      to: new Vector3(t.x, this.ground.heightAt(t.x, t.z), t.z),
+      toRotation: new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), yaw),
+    };
+  }
+
+  /** Turib bo'lgan piyoda yana oddiy NPC bo'ladi — o'sha qiyofa, o'sha yo'lak. */
+  private standUp(k: Knocked): boolean {
+    const { agent, rise } = k, to = rise!.to;
+    const standing = this.createAgent(agent.template, true, agent.edge, projectToEdge(agent.edge, to).distance, to, rise!.yaw);
+    if (!standing) return false;
+    this.remove(agent, false, true);
+    return true;
+  }
+
+  /** Tinchlangan mashina qo'zg'almas to'siq bo'lib qoladi, haydovchisi tushib ketadi. */
+  private settleCar(k: Knocked, player: PointXZ): void {
+    const body = k.body!, t = body.translation(), agent = k.agent;
+    body.setBodyType(RAPIER.RigidBodyType.Fixed, true);
+    k.phase = 'settled';
+    if (agent.rider && agent.riderTemplate) {
+      agent.rider.object.removeFromParent();
+      agent.rider.dispose();
+      agent.rider = null;
+      const forward = new Vector3(0, 0, 1).applyQuaternion(agent.object.quaternion);
+      this.physics.world.updateSceneQueries();
+      this.ejectDriver(agent.riderTemplate, t, Math.atan2(forward.x, forward.z), vehicleSpec(agent.object).half, player);
+    }
   }
 
   /** O'yinchi mashinasiga qaytadigan zarba massasi (o'qilgach nolga tushadi). */
@@ -518,7 +682,7 @@ export class Traffic {
 
   reset(): void {
     for (const agent of [...this.agents]) this.remove(agent);
-    for (const k of this.knocked) { this.physics.world.removeRigidBody(k.body); this.remove(k.agent, false, true); }
+    for (const k of this.knocked) { if (k.body) this.physics.world.removeRigidBody(k.body); this.remove(k.agent, false, true); }
     this.knocked = [];
     this.spawnTimer = 0;
   }
