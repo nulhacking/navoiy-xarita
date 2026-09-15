@@ -36,6 +36,7 @@ export function TouchControls({ input }: { input: Input }) {
       <Joystick input={input} />
       <div className="touch-buttons">
         <HoldButton input={input} code="Space" label={driving ? 'Tormoz' : 'Sakrash'} icon={driving ? '■' : '⤒'} />
+        <HoldButton input={input} code={driving ? 'KeyV' : 'KeyE'} label={driving ? 'Oyna' : 'Salom'} icon={driving ? '◜' : '✋'} />
         {driving
           ? <HoldButton input={input} code="KeyC" label="Orqaga" icon="↺" />
           : (

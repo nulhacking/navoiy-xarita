@@ -18,7 +18,7 @@ try {
     const {animateVehicle}=await import('/src/city/VehicleRig.ts');
     const fleet=await loadFleet(),character=await loadCharacter(),p=city.player;
     const initialParked=city.parked.snapshot;
-    const pressF=()=>{window.dispatchEvent(new KeyboardEvent('keydown',{code:'KeyF'}));window.dispatchEvent(new KeyboardEvent('keyup',{code:'KeyF'}));p.update(1/60);city.physics.world.step();p.render();};
+    const pressF=()=>{window.dispatchEvent(new KeyboardEvent('keydown',{code:'KeyF'}));window.dispatchEvent(new KeyboardEvent('keyup',{code:'KeyF'}));for(let frame=0;frame<600;frame++){p.update(1/60);city.physics.world.step();p.render();if(frame>1&&!p.entryPath.length&&!p.vehicleTransition)break;}};
     const tests=[];
     for(let i=0;i<fleet.length;i++) {
       if(p.mode==='drive')pressF();

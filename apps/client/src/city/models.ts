@@ -1,8 +1,9 @@
-import { AnimationClip, Box3, BufferAttribute, Group, Mesh, SkinnedMesh, Vector3, type Object3D, type BufferGeometry, type Material } from 'three';
+import { AnimationClip, Box3, BufferAttribute, Group, Mesh, MeshPhysicalMaterial, SkinnedMesh, Sphere, Vector3, type Object3D, type BufferGeometry, type Material } from 'three';
 import { rigVehicle } from './VehicleRig.ts';
 import { createGltfLoader } from './GltfLoader.ts';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { updateModelLOD } from './ModelLOD.ts';
 
 /**
  * Tayyor 3D modellar.
@@ -35,6 +36,7 @@ async function loadFitted(
   fitAxis: 'height' | 'length',
 ): Promise<LoadedModel> {
   const gltf = await loader.loadAsync(url);
+  updateModelLOD(gltf.scene);
   const source = fitAxis === 'length' ? rigVehicle(gltf.scene, batchStaticModel) : gltf.scene;
 
   const box = new Box3().setFromObject(source);
@@ -61,13 +63,36 @@ async function loadFitted(
   wrapper.add(source);
 
   wrapper.traverse((child) => {
+    if(child instanceof SkinnedMesh&&url.includes('/reference/')){
+      // Conservative animated bounds include swimming, gestures and seated poses.
+      // Off-screen characters can then be culled without clipping moving limbs.
+      child.boundingSphere=new Sphere(new Vector3(0,.9,0),2.2);child.frustumCulled=true;child.userData.characterBounds=true;
+    }
     if (child instanceof Mesh) {
       child.castShadow = true;
       child.receiveShadow = false;
+      for (const material of Array.isArray(child.material) ? child.material : [child.material]) dropTransmission(material);
     }
   });
 
   return { object: wrapper, animations: gltf.animations };
+}
+
+/**
+ * `transmission` li shisha oddiy shaffof shishaga aylantiriladi.
+ *
+ * Sahnada bitta shunday material bo'lsa ham three har kadr butun shaffof
+ * bo'lmagan sahnani alohida render-targetga QAYTA chizadi, va bu o'tishning
+ * shaderlari birinchi kadrda sinxron bog'lanib, Windows/ANGLE'da ekranni
+ * ~4 soniya qotirardi. Ko'cha masshtabida sinish farqi ko'rinmaydi.
+ */
+function dropTransmission(material: Material): void {
+  if (!(material instanceof MeshPhysicalMaterial) || material.transmission <= 0) return;
+  material.transmission = 0;
+  material.transparent = true;
+  material.opacity = 0.35;
+  material.depthWrite = false;
+  material.needsUpdate = true;
 }
 
 /** Static car parts sharing a material become one draw call. Skinning is never merged. */
@@ -136,12 +161,13 @@ const footVertex = new Vector3();
  * Kesh geometriya bo'yicha: klonlar geometriyani baham ko'radi, demak
  * skanerlash butun shahar uchun bir marta bajariladi.
  */
-export function alignCharacterFeet(object: Object3D, footY: number): void {
+export function alignCharacterFeet(object: Object3D, footY: number, preserveFlight = false): void {
   object.updateMatrixWorld(true);
   let bottom = Infinity;
-  object.traverse((child) => {
+  object.traverseVisible((child) => {
     if (!(child instanceof SkinnedMesh)) return;
-    child.frustumCulled = false;
+    if(!child.userData.characterBounds)child.frustumCulled = false;
+    else {if(!child.geometry.boundingBox)child.geometry.computeBoundingBox();if(child.geometry.boundingBox!.min.y>.25)return;}
     let indices = footVertices.get(child.geometry);
     if (!indices) {
       const position = child.geometry.getAttribute('position');
@@ -168,12 +194,15 @@ export function alignCharacterFeet(object: Object3D, footY: number): void {
       bottom = Math.min(bottom, footVertex.y);
     }
   });
-  if (Number.isFinite(bottom)) object.position.y += footY - bottom;
+  if (Number.isFinite(bottom)) object.position.y += preserveFlight ? Math.max(0,footY-bottom) : footY-bottom;
 }
 
 /** Piyoda personaj. Bo'yi ~1.8 m, yurish animatsiyasi bilan. */
 export function loadCharacter(): Promise<LoadedModel> {
-  return loadFitted('/models/casual.glb', 1.8, 'height');
+  const requested = new URLSearchParams(location.search).get('avatar') ?? 'yigit';
+  const id = ['yigit', 'qiz', 'ishbilarmon', 'ishchi'].includes(requested) ? requested : 'yigit';
+  const height = id === 'qiz' ? 1.7 : id === 'ishchi' ? 1.83 : id === 'ishbilarmon' ? 1.78 : 1.8;
+  return loadFitted(`/models/reference/${id}.glb`, height, 'height');
 }
 
 /**
@@ -185,20 +214,24 @@ export function loadCharacter(): Promise<LoadedModel> {
  */
 export async function loadPedestrians(): Promise<LoadedModel[]> {
   return Promise.all([
-    loadFitted('/models/woman.glb', 1.72, 'height'),
-    loadFitted('/models/man.glb', 1.8, 'height'),
-    loadFitted('/models/woman-casual.glb', 1.7, 'height'),
-    loadFitted('/models/worker.glb', 1.83, 'height'),
-    loadFitted('/models/businessman.glb', 1.78, 'height'),
-    loadFitted('/models/woman-dress.glb', 1.68, 'height'),
-    loadFitted('/models/woman-tanktop.glb', 1.71, 'height'),
+    loadFitted('/models/reference/qiz.glb', 1.7, 'height'),
+    loadFitted('/models/reference/yigit.glb', 1.8, 'height'),
+    loadFitted('/models/reference/ishchi.glb', 1.83, 'height'),
+    loadFitted('/models/reference/ishbilarmon.glb', 1.78, 'height'),
   ]);
 }
 
 /** Yengil avtomobil. Uzunligi ~4.5 m. */
-export function loadVehicle(): Promise<LoadedModel> {
-  return loadFitted('/models/car.glb', 4.5, 'length');
+export async function loadVehicle(): Promise<LoadedModel> {
+  const gltf = await loader.loadAsync('/models/reference/sedan.glb');
+  updateModelLOD(gltf.scene);
+  gltf.scene.userData.vehicleId = 'sedan';
+  gltf.scene.traverse(node => {
+    if (node instanceof Mesh) node.castShadow = true;
+    if (node.userData.brakeLight || node.userData.indicator) node.visible = false;
+  });
+  return { object: gltf.scene, animations: gltf.animations };
 }
 
 export const MODEL_ATTRIBUTION =
-  'Odamlar (casual, ishchi, tadbirkor, ayollar), sedan, SUV, daraxtlar: Quaternius (CC0); CarConcept: DGG (CC BY 4.0); Suzuki: Paul Spooner; velosiped: jeremy; AC: Poly by Google; skameyka: Ev Amitay; chiroq: Zsky (CC BY 3.0). Manbalar: /models/credits.html';
+  'Personajlar: MakeHuman / MPFB CC0 aktivlari; yurish va yugurish: CMU motion capture. Sedan, SUV va velosiped: Xarita modellari. Daraxtlar: Quaternius (CC0); Suzuki: Paul Spooner; AC: Poly by Google; skameyka: Ev Amitay; chiroq: Zsky (CC BY 3.0). Manbalar: /models/credits.html';

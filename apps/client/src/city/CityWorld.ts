@@ -11,6 +11,7 @@ import {
 import { type TileCoord, lonLatToTile, tileKey, tileUvToLonLat } from '@xarita/geo';
 
 import type { Engine, FrameContext } from '../engine/Engine.ts';
+import { warmScene } from '../engine/warmScene.ts';
 import { OsmSource } from './OsmSource.ts';
 import { TerrainSource } from './sources.ts';
 import { CityFrame } from './CityFrame.ts';
@@ -95,6 +96,7 @@ export class CityWorld {
   private mapsDirty = false;
   private wantedTiles = new Set<string>();
   private readonly loadJobs = new Map<string, Promise<void>>();
+  private readonly detailQueue = new Map<CityTile, Vector3>();
 
   private readonly engine: Engine;
   private readonly input: Input;
@@ -248,6 +250,22 @@ export class CityWorld {
     this.physics.bakeStaticColliders();
     // Yengil rejim: relyef va landmarklar arzon materialga (tayllar `loadTile` da).
     for (const object of [this.ground.mesh, this.lake?.group, this.hokimiyat.group, this.farxod.group, this.softex.group, this.xalqlar.group]) if (object) liteMaterials(object);
+    // Shaderlar birinchi kadrdan OLDIN, parallel kompilyatsiya qilinadi
+    // (`KHR_parallel_shader_compile`). Aks holda ~70 ta dastur birinchi
+    // `render()` ichida ketma-ket kompilyatsiya bo'lib, Windows/ANGLE'da
+    // ekranni 10 soniyadan ortiq qotirib qo'yardi. Osmon avval o'rnatiladi:
+    // `scene.environment` shaderning o'zini o'zgartiradi, busiz oldindan
+    // kompilyatsiya qilingan dasturlar birinchi kadrda baribir tashlab
+    // yuborilardi. Shu sababli bu qadam eng oxirida turadi — ko'l parki
+    // chiroqlarni qo'shgandan keyin: chiroqlar soni ham shader kalitiga kiradi.
+    this.currentSky = this.sky.update(this.clock.now(), center.lat, center.lon, spawn);
+    setStreetLightLevel(1 - this.currentSky.daylight);
+    this.engine.stop();
+    try {
+      await warmScene(this.engine.renderer, this.engine.scene, this.engine.camera,
+        [character, vehicle, ...pedestrians, ...fleet].filter((model): model is LoadedModel => !!model).map(model=>model.object));
+    } finally { this.engine.start(); }
+    if (this.disposed) return;
     this.ready = true;
   }
 
@@ -265,7 +283,7 @@ export class CityWorld {
         this.player!.absorbImpact(this.traffic?.takeImpact() ?? 0);
       });
     }
-    this.player.render();
+    this.player.render(this.paused||this.teleporting?1:this.physics.interpolationAlpha,ctx.dt);
     this.traffic?.render();
     this.breakables?.update(this.paused ? 0 : ctx.dt);
 
@@ -274,6 +292,7 @@ export class CityWorld {
     // qamraydi — shuning uchun u doim o'yinchi ustida turishi kerak.
     // Osmon, soyalar va ko'cha chiroqlari — hammasi bitta lahzadan.
     const position = this.player.state.position;
+    this.parked?.updateDetail(position);
     if (this.frame) {
       const { lat, lon } = this.frame.origin;
       this.currentSky = this.sky.update(this.clock.now(), lat, lon, position);
@@ -291,6 +310,9 @@ export class CityWorld {
       this.selectTimer = 0;
       void this.select(false);
     }
+    // Spread facade/furniture uploads across frames as the player moves.
+    const detailJob=this.detailQueue.entries().next().value;
+    if(detailJob){this.detailQueue.delete(detailJob[0]);detailJob[0].updateDetails(detailJob[1]);}
   };
 
   /**
@@ -436,6 +458,7 @@ export class CityWorld {
     for (const [key, tile] of this.tiles) {
       if (wanted.has(key)) continue;
       this.group.remove(tile.group);
+      this.detailQueue.delete(tile);
       tile.dispose();
       this.tiles.delete(key);
       this.mapsDirty = true;
@@ -444,7 +467,10 @@ export class CityWorld {
     }
 
     if (waitForAll) await Promise.all(jobs);
-    for(const tile of this.tiles.values())tile.updateDetails(position);
+    for(const tile of this.tiles.values()) {
+      if(waitForAll){this.detailQueue.delete(tile);tile.updateDetails(position);}
+      else this.detailQueue.set(tile,position);
+    }
 
     this.updatePhysicsTiles(center, zoom);
     if (this.mapsDirty) {
@@ -590,6 +616,7 @@ export class CityWorld {
 
   dispose(): void {
     this.disposed = true;
+    this.detailQueue.clear();
     this.traffic?.dispose();
     this.breakables?.dispose();
     this.parked?.dispose();

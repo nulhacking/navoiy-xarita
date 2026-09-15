@@ -1,6 +1,8 @@
 import { Box3, BufferAttribute, BufferGeometry, Group, Mesh, MeshStandardMaterial, Vector3, type Object3D } from 'three';
 import { createGltfLoader } from './GltfLoader.ts';
+import { updateModelLOD } from './ModelLOD.ts';
 import { batchStaticModel, type LoadedModel } from './models.ts';
+import { buildBicycle } from './Bicycle.ts';
 
 export type VehicleKind = 'car' | 'motorcycle' | 'bicycle';
 
@@ -35,14 +37,14 @@ export interface VehicleSpec {
 export const VEHICLE_SPECS: VehicleSpec[] = [
   { id:'car', label:'Sport avtomobil', kind:'car', length:4.5, half:{x:.95,y:.7,z:2.25}, maxSpeed:40, acceleration:7, brake:11,
     rig:{ seat:[.36,.36,-.10], grip:[.17,.72,.16], foot:[.13,.06,.52], lean:-.16, crank:0 } },
-  { id:'sedan', label:'Sedan', kind:'car', length:4.5, half:{x:.96,y:.63,z:2.25}, maxSpeed:34, acceleration:5.5, brake:10,
-    rig:{ seat:[.36,.24,.02], grip:[.17,.60,.30], foot:[.13,.00,.62], lean:-.10, crank:0 } },
-  { id:'suv', label:'SUV', kind:'car', length:4.65, half:{x:1.12,y:.82,z:2.325}, maxSpeed:31, acceleration:4.8, brake:10,
-    rig:{ seat:[.4,.46,.10], grip:[.18,.82,.40], foot:[.14,.18,.72], lean:-.08, crank:0 } },
+  { id:'sedan', label:'Sedan', kind:'car', length:4.5, half:{x:.99,y:.75,z:2.32}, maxSpeed:34, acceleration:5.5, brake:10,
+    rig:{ seat:[.36,.52,-.02], grip:[.17,.97,.38], foot:[.13,.22,.62], lean:-.10, crank:0 } },
+  { id:'suv', label:'SUV', kind:'car', length:4.65, half:{x:1.04,y:.9,z:2.4}, maxSpeed:31, acceleration:4.8, brake:10,
+    rig:{ seat:[.36,.71,-.02], grip:[.17,1.14,.38], foot:[.14,.40,.62], lean:-.08, crank:0 } },
   { id:'motorcycle', label:'Mototsikl', kind:'motorcycle', length:2.2, half:{x:.38,y:.5,z:1.1}, maxSpeed:38, acceleration:8.5, brake:12,
     rig:{ seat:[0,.90,-.26], grip:[.25,.98,.42], foot:[.20,.44,-.24], lean:1.15, crank:0 } },
   { id:'bicycle', label:'Velosiped', kind:'bicycle', length:1.85, half:{x:.3,y:.45,z:.925}, maxSpeed:11, acceleration:2.8, brake:7,
-    rig:{ seat:[0,.97,-.20], grip:[.18,.94,.42], foot:[.10,.30,.02], lean:1.35, crank:.16 } },
+    rig:{ seat:[0,.97,-.20], grip:[.18,.94,.42], foot:[.11,.39,-.03], lean:1.12, crank:.16 } },
 ];
 export const vehicleSpec = (object: Object3D): VehicleSpec => VEHICLE_SPECS.find(s=>s.id===object.userData.vehicleId) ?? VEHICLE_SPECS[0]!;
 
@@ -128,6 +130,18 @@ function rig(source:Group, id:string):Group {
 
 export async function loadFleet():Promise<LoadedModel[]> {
   return Promise.all(VEHICLE_SPECS.slice(1).map(async spec=>{
+    if(spec.id==='bicycle')return {object:buildBicycle(),animations:[]};
+    if (spec.id === 'sedan' || spec.id === 'suv') {
+      const gltf = await createGltfLoader().loadAsync(`/models/reference/${spec.id}.glb`);
+      const object = gltf.scene;
+      updateModelLOD(object);
+      object.userData.vehicleId = spec.id; object.name = spec.label;
+      object.traverse(n => {
+        if (n instanceof Mesh) n.castShadow = true;
+        if (n.userData.brakeLight || n.userData.indicator) n.visible = false;
+      });
+      return { object, animations: gltf.animations };
+    }
     const gltf=await createGltfLoader().loadAsync(`/models/${spec.id}.glb`);
     const source=rig(gltf.scene,spec.id), b=new Box3().setFromObject(source), size=b.getSize(new Vector3());
     const scale=spec.length/Math.max(size.x,size.z);source.scale.setScalar(scale);

@@ -16,6 +16,7 @@ export default defineConfig({
     host: true,
   },
   build: {
+    rollupOptions: { input: { main: fileURLToPath(new URL('./index.html', import.meta.url)), models: fileURLToPath(new URL('./models.html', import.meta.url)) } },
     target: 'es2022',
     // 3D Tiles + three katta — chunk ogohlantirishini realistik chegaraga qo'yamiz.
     chunkSizeWarningLimit: 1500,

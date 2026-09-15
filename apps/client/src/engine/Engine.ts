@@ -65,6 +65,7 @@ export class Engine {
   private pixelRatio = this.maxPixelRatio;
   private slowSamples = 0;
   private fastSamples = 0;
+  private reducedShadowRate = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -128,6 +129,7 @@ export class Engine {
     const ctx: FrameContext = { dt, elapsed: this.elapsed, frame: this.frame };
     for (const system of this.systems) system(ctx);
 
+    if (this.reducedShadowRate) this.renderer.shadowMap.needsUpdate = this.frame % 2 === 0;
     this.renderer.render(this.scene, this.camera);
 
     this.fpsAccumulator += wallDt;
@@ -138,10 +140,9 @@ export class Engine {
       else if(this.smoothedFps>57){this.fastSamples++;this.slowSamples=0;}
       else {this.slowSamples=0;this.fastSamples=0;}
       if(this.slowSamples>=3&&this.pixelRatio>this.minPixelRatio){this.pixelRatio=Math.max(this.minPixelRatio,this.pixelRatio-.12);this.renderer.setPixelRatio(this.pixelRatio);this.resize();this.slowSamples=0;}
-      // Aniqlik pastki chegarada, kadr hamon sekin: oxirgi zaxira — soyalarni o'chirish.
-      // Materiallar bir marta qayta kompilyatsiya qilinadi; qaytarib yoqilmaydi, aks holda
-      // chegara atrofida har bir necha soniyada qotish takrorlanardi.
-      else if(this.slowSamples>=6&&this.renderer.shadowMap.enabled){this.renderer.shadowMap.enabled=false;this.scene.traverse(n=>{const m=(n as {material?:{needsUpdate:boolean}|Array<{needsUpdate:boolean}>}).material;if(m)for(const x of Array.isArray(m)?m:[m])x.needsUpdate=true;});this.slowSamples=0;}
+      // Keep the existing shaders and grounded contact shadows. Disabling shadows
+      // here rebuilt every material's program in the middle of gameplay.
+      else if(this.slowSamples>=6&&this.renderer.shadowMap.enabled&&!this.reducedShadowRate){this.reducedShadowRate=true;this.renderer.shadowMap.autoUpdate=false;this.slowSamples=0;}
       if(this.fastSamples>=8&&this.pixelRatio<this.maxPixelRatio){this.pixelRatio=Math.min(this.maxPixelRatio,this.pixelRatio+.08);this.renderer.setPixelRatio(this.pixelRatio);this.resize();this.fastSamples=0;}
       this.fpsAccumulator = 0;
       this.fpsFrames = 0;

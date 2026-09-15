@@ -267,12 +267,14 @@ function Controls() {
           <kbd>D</kbd> burilish
           <kbd>F</kbd> tushish
           <kbd>Space</kbd> qo‘l tormozi
+          <kbd>V</kbd> oyna tozalagich
         </>
       ) : (
         <>
           <kbd>W A S D</kbd> yurish
           <kbd>Shift</kbd> yugurish
           <kbd>Space</kbd> sakrash
+          <kbd>E</kbd> salomlashish
           <kbd className={player.nearCar ? 'hot' : ''}>F</kbd>
           {player.nearCar ? 'eng yaqin transportga o‘tirish' : 'transport yaqinida'}
         </>
@@ -281,6 +283,7 @@ function Controls() {
       {player.mode === 'drive' ? <><kbd>C</kbd> orqa kamera</> : null}
       <kbd>M</kbd> xarita
       <kbd>F3</kbd> statistika
+      <a href="/models.html" style={{ color: 'inherit' }}>3D modellar ↗</a>
     </div>
   );
 }

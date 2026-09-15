@@ -15,9 +15,10 @@ try {
     const tick=s=>{for(let i=0;i<s*60;i++) city.update({dt:1/60,elapsed:i/60,frame:i});};
     const p=city.player, input=p.input;
     const key=(code,down)=>window.dispatchEvent(new KeyboardEvent(down?'keydown':'keyup',{code}));
-    tick(1);key('KeyF',true);key('KeyF',false);tick(.1);
-    const front=p.car.getObjectByName('WheelFrontL'), rear=p.car.getObjectByName('WheelRearL');
-    const spin=front?.getObjectByName('WheelSpin');
+    tick(1);key('KeyF',true);key('KeyF',false);tick(9);
+    const wheels=[];p.car.traverse(n=>{if(n.userData.vehicleWheel)wheels.push(n);});
+    const front=wheels.find(n=>n.userData.front), rear=wheels.find(n=>!n.userData.front);
+    const spin=front?.children.find(n=>n.userData.vehicleSpin)??front?.getObjectByName('WheelSpin');
     const startSpin=spin?.rotation.x;
     key('KeyW',true);key('KeyA',true);tick(.5);key('KeyA',false);
     const wheelTurn=front?.rotation.y, rearTurn=rear?.rotation.y, wheelSpin=spin?.rotation.x;
@@ -29,7 +30,7 @@ try {
     key('KeyW',false);key('KeyC',true);tick(.5);key('KeyC',false);const resetYaw=p.yaw;
     tick(8);
     const models=city.traffic.characters.length;
-    key('KeyF',true);key('KeyF',false);tick(.2);
+    key('KeyF',true);key('KeyF',false);tick(1.5);
     const walker={...p.body.translation()};
     // O'z mashinasi ham yaqin, lekin NPC undan yaqinroq: F eng yaqinni olishi shart.
     p.carPosition.set(walker.x+4,city.ground.heightAt(walker.x+4,walker.z)+.7,walker.z);
@@ -44,7 +45,9 @@ try {
     steal.speed=0;
     const carsBefore=city.traffic.counts.cars;
     key('KeyF',true);key('KeyF',false);tick(.1);
-    const claimed={mode:p.mode,carsRemoved:carsBefore-city.traffic.counts.cars,distance:Math.hypot(p.carPosition.x-stolenAt.x,p.carPosition.y-stolenAt.y,p.carPosition.z-stolenAt.z)};
+    // Claim is immediate; boarding now waits for a collision-tested walk to
+    // the door. Population may respawn during that walk, so count here.
+    const claimed={identity:p.car.uuid===steal.object.uuid,removed:!city.traffic.agents.includes(steal),mode:p.mode,carsRemoved:carsBefore-city.traffic.counts.cars,distance:Math.hypot(p.carPosition.x-stolenAt.x,p.carPosition.y-stolenAt.y,p.carPosition.z-stolenAt.z)};
     const signalHeads=city.traffic.signals.count;
     const {lanePoint}=await import('/src/city/RoadNetwork.ts');
     const traffic=city.traffic, signals=traffic.signals;
@@ -82,14 +85,13 @@ try {
   });
   console.log(result);
   mkdirSync('artifacts',{recursive:true});await page.screenshot({path:'artifacts/navoiy-signals.png'});
-  assert.equal(result.mode,'drive');
   assert.ok(Math.abs(result.wheelSpin-result.startSpin)>.01);
   assert.ok(Math.abs(result.wheelTurn)>.1);assert.equal(result.rearTurn,0);
   assert.ok(Math.abs(result.orbitYaw-result.yaw)>1);assert.equal(result.heldYaw,result.orbitYaw);
   assert.ok(Math.abs(result.resetYaw-result.heldYaw)>.1);
-  // O'yinchi personaji + `loadPedestrians()` dagi yetti kiyim-bosh.
-  assert.equal(result.models,8);assert.ok(result.signalHeads>0);
-  assert.equal(result.claimed.mode,'drive');assert.equal(result.claimed.carsRemoved,1);assert.ok(result.claimed.distance<1);
+  // O'yinchi personaji + to'rtta Blender personaji.
+  assert.equal(result.models,5);assert.ok(result.signalHeads>0);
+  assert.equal(result.claimed.identity,true);assert.equal(result.claimed.removed,true);assert.ok(result.claimed.distance<1);
   assert.ok(result.signalTest&&result.signalTest.redProgress<=result.signalTest.stop+.2);
   assert.ok(result.signalTest.greenTravel>1);
   assert.equal(result.shaderErrors,0);assert.deepEqual(errors,[]);

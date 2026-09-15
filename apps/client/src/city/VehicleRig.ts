@@ -1,4 +1,5 @@
 import { Box3, Group, Matrix4, Mesh, Vector3, type Object3D } from 'three';
+import { BICYCLE_METRES_PER_RADIAN } from './VehicleMotion.ts';
 
 /** CarConcept's front wheels are authored at 30 degrees. Preserve their pivots,
  * straighten the axle, and batch the body separately. Runtime forward is +Z. */
@@ -47,15 +48,58 @@ export function animateVehicle(object: Object3D, distance: number, steering: num
   let wheels = wheelCache.get(object);
   if (!wheels) {
     wheels = [];
-    object.traverse(node => { if (node.userData.vehicleWheel) wheels!.push(node); });
+    object.traverse(node => { if (node.userData.vehicleWheel || node.userData.vehicleHandlebar || node.userData.vehicleCrank) wheels!.push(node); });
     wheelCache.set(object, wheels);
   }
   object.updateMatrixWorld(true);
   for (const wheel of wheels) {
+    if(wheel.userData.vehicleHandlebar){wheel.rotation.y=steering;continue;}
+    if(wheel.userData.vehicleCrank){
+      object.userData.pedalPhase=((object.userData.pedalPhase??0)-distance/BICYCLE_METRES_PER_RADIAN)%(Math.PI*2);
+      wheel.rotation.x=-object.userData.pedalPhase;
+      for(const pedal of wheel.children)if(pedal.userData.vehiclePedal)pedal.rotation.x=-wheel.rotation.x;
+      continue;
+    }
     wheel.rotation.y = wheel.userData.front ? steering : 0;
-    const spin = wheel.getObjectByName('WheelSpin');
+    const spin = wheel.children.find(n => n.userData.vehicleSpin) ?? wheel.getObjectByName('WheelSpin');
     const scale = wheel.getWorldScale(new Vector3()).y;
     const radius = Number(wheel.userData.radius) * scale;
-    if (spin && radius > .01) spin.rotation.x = (spin.rotation.x + distance / radius * (wheel.userData.spinSign ?? 1)) % (Math.PI * 2);
+    if (spin && radius > .01) {
+      spin.userData.previousRoll = spin.userData.roll ?? spin.rotation.x;
+      spin.userData.roll = (spin.userData.previousRoll + distance / radius * (wheel.userData.spinSign ?? 1)) % (Math.PI * 2);
+      spin.rotation.x = spin.userData.roll;
+    }
+  }
+}
+
+/** Draw between fixed physics ticks without feeding display transforms back into travel. */
+export function renderVehiclePose(object: Object3D, alpha: number, steering: number, phase: number): void {
+  for (const node of wheelCache.get(object) ?? []) {
+    if (node.userData.vehicleHandlebar) { node.rotation.y = steering; continue; }
+    if (node.userData.vehicleCrank) {
+      node.rotation.x = -phase;
+      for (const pedal of node.children) if (pedal.userData.vehiclePedal) pedal.rotation.x = phase;
+      continue;
+    }
+    node.rotation.y = node.userData.front ? steering : 0;
+    const spin = node.children.find(n => n.userData.vehicleSpin) ?? node.getObjectByName('WheelSpin');
+    if (spin && spin.userData.roll !== undefined) {
+      const previous = spin.userData.previousRoll, delta = spin.userData.roll - previous;
+      spin.rotation.x = previous + Math.atan2(Math.sin(delta), Math.cos(delta)) * alpha;
+    }
+  }
+}
+
+const accessoryCache = new WeakMap<Object3D, Object3D[]>();
+/** Per-instance visibility and transforms; shared materials are never mutated. */
+export function animateVehicleAccessories(object: Object3D, state: { time: number; steering: number; brake: boolean; door?: number; doorSide?: number; wipers?: boolean }): void {
+  let nodes = accessoryCache.get(object);
+  if (!nodes) { nodes = []; object.traverse(n => { if (n.userData.vehicleDoor || n.userData.brakeLight || n.userData.indicator || /^Wiper_|^SteeringWheel$/.test(n.name)) nodes!.push(n); }); accessoryCache.set(object, nodes); }
+  for (const node of nodes) {
+    if (node.userData.vehicleDoor && node.userData.front) { const side=node.userData.left?1:-1;node.rotation.y=side===(state.doorSide??1)?-side*(state.door??0)*1.05:0; }
+    if (node.userData.brakeLight) node.visible = state.brake;
+    if (node.userData.indicator) node.visible = Math.abs(state.steering) > .12 && Math.sign(state.steering) === node.userData.indicator && Math.floor(state.time * 2.5) % 2 === 0;
+    if (node.name === 'SteeringWheel') node.rotation.z = -state.steering * 2.6;
+    if (/^Wiper_/.test(node.name)) node.quaternion.setFromAxisAngle(new Vector3(...(node.userData.wiperAxis ?? [0,.84,.54])).normalize(),state.wipers?(1-Math.cos(state.time*Math.PI*2/1.2))*.5:0);
   }
 }

@@ -1,6 +1,7 @@
-import { Bone, Group, Quaternion, SkinnedMesh, Vector3, type Object3D } from 'three';
+import { Bone, Group, Matrix4, Quaternion, SkinnedMesh, Vector3, type Object3D } from 'three';
 import { cloneModel, type LoadedModel } from './models.ts';
 import type { VehicleSpec } from './FleetAssets.ts';
+import { BICYCLE_METRES_PER_RADIAN } from './VehicleMotion.ts';
 
 /**
  * Chap va o'ng tomon belgisi.
@@ -11,7 +12,7 @@ import type { VehicleSpec } from './FleetAssets.ts';
 const SIDES = [['L', 1], ['R', -1]] as const;
 
 /** Rul ustunining tikkalikdan og'ishi, radian — qo'llar shu tekislikda yuradi. */
-const COLUMN_TILT = 0.5;
+const COLUMN_TILT = 0;
 
 /**
  * Transportda o'tirgan personaj: mustaqil skeletli klon.
@@ -33,7 +34,10 @@ export class Rider {
   private readonly rest = new Map<Bone, { position: Vector3; quaternion: Quaternion; scale: Vector3 }>();
   /** Pedal aylanish fazasi, radian. */
   private phase = 0;
-  private signature = '';
+  private lastSpec = '';
+  private lastSteering = Infinity;
+  private lastPhase = Infinity;
+  private readonly handFrames = new Map<string,{rotation:Quaternion;curlAxis:Vector3}>();
 
   constructor(template: LoadedModel) {
     this.model = cloneModel(template).object;
@@ -48,6 +52,18 @@ export class Rider {
       if (node instanceof SkinnedMesh) this.skins.push(node);
     });
     this.object.name = 'VisibleRider';
+    this.object.updateMatrixWorld(true);
+    for(const [side,sign] of SIDES){
+      const hand=this.bone(`Hand${side}`),middle=this.bone(`middle01${side.toLowerCase()}`),index=this.bone(`index01${side.toLowerCase()}`),pinky=this.bone(`pinky01${side.toLowerCase()}`);
+      if(!hand||!middle||!index||!pinky)continue;
+      const forward=middle.getWorldPosition(new Vector3()).sub(hand.getWorldPosition(new Vector3())).normalize();
+      const across=index.getWorldPosition(new Vector3()).sub(pinky.getWorldPosition(new Vector3()));across.addScaledVector(forward,-across.dot(forward)).normalize();
+      const normal=new Vector3().crossVectors(across,forward).normalize();
+      const restFrame=new Matrix4().makeBasis(across,normal,forward);
+      const wantedForward=new Vector3(0,-.12,1).normalize(),wantedAcross=new Vector3(-sign,0,0);
+      const wantedFrame=new Matrix4().makeBasis(wantedAcross,new Vector3().crossVectors(wantedAcross,wantedForward),wantedForward);
+      this.handFrames.set(side,{rotation:new Quaternion().setFromRotationMatrix(wantedFrame.multiply(restFrame.invert())),curlAxis:across});
+    }
   }
 
   /**
@@ -56,14 +72,13 @@ export class Rider {
    * @param distance bosib o'tilgan masofa, metr — pedal aylanishi uchun
    * @param steering rul burchagi, radian
    */
-  pose(spec: VehicleSpec, distance = 0, steering = 0): void {
+  pose(spec: VehicleSpec, distance = 0, steering = 0, pedalPhase?:number): void {
     const rig = spec.rig;
-    if (rig.crank > 0) this.phase += distance / rig.crank;
-    // Qayta hisoblash faqat ko'rinadigan o'zgarish bo'lganda: rul bir gradusga
-    // burilmasa yoki pedal joyida tursa, eski poza aynan shu poza.
-    const signature = `${spec.id}|${Math.round(steering * 60)}|${rig.crank > 0 ? Math.round(this.phase * 10) : 0}`;
-    if (signature === this.signature) return;
-    this.signature = signature;
+    // Wheel radius × gear ratio sets cadence, not crank-arm length. The old
+    // formula spun the feet backwards at roughly 300 rpm at ordinary speed.
+    if (rig.crank > 0) this.phase = pedalPhase ?? (this.phase - distance / BICYCLE_METRES_PER_RADIAN) % (Math.PI * 2);
+    if (spec.id === this.lastSpec && Math.abs(steering-this.lastSteering)<1e-5 && Math.abs(this.phase-this.lastPhase)<1e-5) return;
+    this.lastSpec=spec.id;this.lastSteering=steering;this.lastPhase=this.phase;
 
     // `skeleton.pose()` EMAS: u suyaklarni bog'lanish matritsalaridan quradi, ular esa
     // modelni o'lchamga moslashdan oldingi masshtabda. BaseHuman piyodalarida bu
@@ -105,12 +120,12 @@ export class Rider {
       // 3. Oyoq: pedalga yoki oyoq tayanchiga.
       const angle = this.phase + (sign > 0 ? 0 : Math.PI);
       const ankle = new Vector3(
-        sign * rig.foot[0],
+        (spec.kind === 'car' ? rig.seat[0] : 0) + sign * rig.foot[0],
         rig.foot[1] + (rig.crank > 0 ? Math.sin(angle) * rig.crank : 0),
         rig.foot[2] + (rig.crank > 0 ? Math.cos(angle) * rig.crank : 0),
       );
       // Tizza oldinga va tashqariga chiqadi — hech qachon orqaga bukilmaydi.
-      const knee = new Vector3(sign * (rig.foot[0] + 0.22), (rig.seat[1] + rig.foot[1]) / 2 + 0.2, rig.foot[2] + 0.6);
+      const knee = new Vector3((spec.kind === 'car' ? rig.seat[0] : 0) + sign * (rig.foot[0] + 0.22), (rig.seat[1] + rig.foot[1]) / 2 + 0.2, rig.foot[2] + 0.6);
       this.limb(`UpperLeg${side}`, `LowerLeg${side}`, ankle, knee);
       // Tovon — ildiz fazosidagi mustaqil suyak (Quaternius IK riggi), uni
       // to'piqqa qo'lda ko'chiramiz. Burilishi bog'lanish pozasidagidek
@@ -118,14 +133,17 @@ export class Rider {
       const foot = this.bone(`Foot${side}`);
       if (foot?.parent) {
         foot.position.copy(foot.parent.worldToLocal(this.object.localToWorld(ankle.clone())));
+        if (/LowerLeg/.test(foot.parent.name)) foot.quaternion.copy(foot.parent.getWorldQuaternion(new Quaternion()).invert().multiply(this.object.getWorldQuaternion(new Quaternion())));
         foot.updateWorldMatrix(false, true);
       }
 
       // 4. Qo'l: rul yoki dastakka.
       const hand = this.grip(spec, sign, steering);
+      if(spec.kind!=='car')hand.add(new Vector3(0,.035,-.045));
       // Tirsak pastga va orqaga qaraydi.
-      const elbow = hand.clone().add(new Vector3(sign * 0.3, -0.34, -0.34));
+      const elbow = hand.clone().add(new Vector3(sign * .16, -.28, -.25));
       this.limb(`UpperArm${side}`, `LowerArm${side}`, hand, elbow);
+      this.grasp(side,sign,spec.kind!=='car',steering);
     }
     this.object.updateMatrixWorld(true);
   }
@@ -138,7 +156,7 @@ export class Rider {
       const turn = steering * 2.6;
       const around = sign * (Math.PI / 2) - turn * sign * sign;
       return new Vector3(
-        spec.rig.seat[0] + Math.sin(around) * half * sign,
+        spec.rig.seat[0] + Math.sin(around) * half,
         y + Math.cos(around) * half * Math.cos(COLUMN_TILT),
         z - Math.cos(around) * half * Math.sin(COLUMN_TILT),
       );
@@ -146,6 +164,7 @@ export class Rider {
     // Dastak burilish o'qi atrofida aylanadi: qo'llar unga ergashadi.
     const cos = Math.cos(steering);
     const sin = Math.sin(steering);
+    if(spec.kind==='bicycle')return new Vector3(sign*half*cos+(z-.585)*sin,y,.585-sign*half*sin+(z-.585)*cos);
     return new Vector3(sign * half * cos, y, z + sign * half * sin);
   }
 
@@ -219,6 +238,25 @@ export class Rider {
       if (bone) return bone;
     }
     return undefined;
+  }
+
+  private grasp(side:string,sign:number,handlebar:boolean,steering:number):void {
+    const frame=this.handFrames.get(side),hand=this.bone(`Hand${side}`);if(!frame||!hand?.parent)return;
+    if(handlebar)hand.quaternion.copy(hand.parent.getWorldQuaternion(new Quaternion()).invert()
+      .multiply(this.object.getWorldQuaternion(new Quaternion()))
+      .multiply(new Quaternion().setFromAxisAngle(new Vector3(0,1,0),steering)).multiply(frame.rotation));
+    for(const finger of ['index','middle','ring','pinky'])for(let joint=1;joint<=3;joint++){
+      const bone=this.bone(`${finger}0${joint}${side.toLowerCase()}`);if(!bone)continue;
+      const curl=finger==='index'?.82:finger==='middle'?1:finger==='ring'?1.06:1.12;
+      bone.quaternion.multiply(new Quaternion().setFromAxisAngle(frame.curlAxis,-sign*curl*(joint===1?.5:joint===2?.85:.55)));
+    }
+    hand.updateWorldMatrix(false,true);
+  }
+
+  /** Use the same seated skeleton at both sides of the visible rider handoff. */
+  blendPose(target: Object3D, seated: number): void {
+    target.traverse(node=>{if(!(node instanceof Bone))return;const source=this.bones.get(node.name.replace(/[._]/g,''));if(!source)return;node.quaternion.slerp(source.quaternion,seated);node.position.lerp(source.position,seated);});
+    target.updateMatrixWorld(true);
   }
 
   dispose(): void {

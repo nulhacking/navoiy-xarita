@@ -5,6 +5,7 @@ import type { Ground } from './Ground.ts';
 import type { TreeBounds } from './trees.ts';
 import { insidePolygon } from './RoadNetwork.ts';
 import { props } from './Breakables.ts';
+import { SpatialGrid } from './SpatialGrid.ts';
 
 type Part={geometry:BufferGeometry;material:Material|Material[]};
 const prefabs=new Map<string,Part[]>();
@@ -77,6 +78,17 @@ export async function loadCityProps():Promise<void> {
 }
 export interface BuildingDetail { ring:Float32Array; base:number; top:number; kind:string; floors:number; seed:number }
 
+type DetailSegment = {x:number;z:number;dx:number;dz:number;width:number;cls:string};
+const detailIndexes = new WeakMap<CityMapData, {segments:DetailSegment[]; roads:SpatialGrid<DetailSegment>; obstacles:SpatialGrid<Float32Array>}>();
+function detailIndex(map:CityMapData) {
+  const cached=detailIndexes.get(map);if(cached)return cached;
+  const segments=map.roads.flatMap(r=>Array.from({length:Math.max(0,r.pts.length/2-1)},(_,i)=>({x:r.pts[i*2]!,z:r.pts[i*2+1]!,dx:r.pts[i*2+2]!-r.pts[i*2]!,dz:r.pts[i*2+3]!-r.pts[i*2+1]!,width:r.width,cls:r.cls})));
+  const roads=new SpatialGrid<DetailSegment>(48),obstacles=new SpatialGrid<Float32Array>(48);
+  for(const ring of [...map.buildings,...map.water])obstacles.insertRing(ring,ring);
+  for(const s of segments){const pad=s.width/2+.4;roads.insert(s,Math.min(s.x,s.x+s.dx)-pad,Math.min(s.z,s.z+s.dz)-pad,Math.max(s.x,s.x+s.dx)+pad,Math.max(s.z,s.z+s.dz)+pad);}
+  const result={segments,roads,obstacles};detailIndexes.set(map,result);return result;
+}
+
 /** Architectural accents are visual estimates; building footprints/levels remain OSM-derived. */
 export function buildCityDetails(map:CityMapData, buildings:BuildingDetail[],ground:Ground,bounds:TreeBounds,focus:{x:number;z:number},exclude?:(p:{x:number;z:number})=>boolean):Group {
   const group=new Group();group.name='StreetAndFacadeDetails';
@@ -104,9 +116,8 @@ export function buildCityDetails(map:CityMapData, buildings:BuildingDetail[],gro
       }
     }
   }
-  const obstacles=[...map.buildings,...map.water];
-  const segments=map.roads.flatMap(r=>Array.from({length:Math.max(0,r.pts.length/2-1)},(_,i)=>({x:r.pts[i*2]!,z:r.pts[i*2+1]!,dx:r.pts[i*2+2]!-r.pts[i*2]!,dz:r.pts[i*2+3]!-r.pts[i*2+1]!,width:r.width,cls:r.cls})));
-  const allowed=(x:number,z:number)=>Math.hypot(x-focus.x,z-focus.z)<550&&!exclude?.({x,z})&&x>=bounds.minX&&x<bounds.maxX&&z>=bounds.minZ&&z<bounds.maxZ&&!obstacles.some(r=>insidePolygon({x,z},r))&&!segments.some(s=>{const t=Math.max(0,Math.min(1,((x-s.x)*s.dx+(z-s.z)*s.dz)/(s.dx*s.dx+s.dz*s.dz||1)));return Math.hypot(x-s.x-t*s.dx,z-s.z-t*s.dz)<s.width/2+.4;});
+  const {segments,roads,obstacles}=detailIndex(map);
+  const allowed=(x:number,z:number)=>Math.hypot(x-focus.x,z-focus.z)<550&&!exclude?.({x,z})&&x>=bounds.minX&&x<bounds.maxX&&z>=bounds.minZ&&z<bounds.maxZ&&!obstacles.query(x,z).some(r=>insidePolygon({x,z},r))&&!roads.query(x,z).some(s=>{const t=Math.max(0,Math.min(1,((x-s.x)*s.dx+(z-s.z)*s.dz)/(s.dx*s.dx+s.dz*s.dz||1)));return Math.hypot(x-s.x-t*s.dx,z-s.z-t*s.dz)<s.width/2+.4;});
   for(const s of segments) {
     if(!['primary','secondary','tertiary','residential'].includes(s.cls))continue;
     const length=Math.hypot(s.dx,s.dz);if(length<35)continue;

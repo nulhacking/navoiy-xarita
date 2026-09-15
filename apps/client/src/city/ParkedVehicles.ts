@@ -2,6 +2,7 @@ import { Group, Vector3, type Object3D } from 'three';
 import { RAPIER, type Physics } from './Physics.ts';
 import type { VehicleClaim } from './Player.ts';
 import { vehicleSpec } from './FleetAssets.ts';
+import { updateModelLOD } from './ModelLOD.ts';
 
 /** Released vehicles keep their exact mesh, paint, pose and a physical obstacle. */
 export class ParkedVehicles {
@@ -30,5 +31,8 @@ export class ParkedVehicles {
     this.entries=this.entries.filter(e=>e!==nearest);return nearest.vehicle;
   }
   get snapshot(){return this.entries.map(e=>({id:e.vehicle.object?.uuid,kind:vehicleSpec(e.vehicle.object as Object3D).kind,position:e.vehicle.position}));}
+  updateDetail(point:Vector3):void {
+    for(const {vehicle} of this.entries)if(vehicle.object)updateModelLOD(vehicle.object,(point.x-vehicle.position.x)**2+(point.z-vehicle.position.z)**2);
+  }
   dispose():void {for(const e of this.entries)this.physics.world.removeRigidBody(e.body);this.entries=[];this.group.clear();}
 }

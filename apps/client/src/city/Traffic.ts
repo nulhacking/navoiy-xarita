@@ -12,6 +12,8 @@ import { TrafficSignals } from './TrafficSignals.ts';
 import { vehicleSpec } from './FleetAssets.ts';
 import { Rider } from './Rider.ts';
 import { QUALITY } from './Quality.ts';
+import { updateModelLOD } from './ModelLOD.ts';
+import { FootPlant } from './FootPlant.ts';
 
 /** `blocked()` indeksining katak o'lchami, metr. */
 const OBSTACLE_CELL = 50;
@@ -39,6 +41,11 @@ interface Agent {
   steering: number;
   yaw: number;
   rider: Rider | null;
+  animationElapsed: number;
+  distanceSquared: number;
+  walkSpeed: number;
+  footPlant: FootPlant | null;
+  footPlantTime: number;
 }
 
 /** Bounded local ambient simulation. Real map lanes, shared assets, independent skeletons. */
@@ -64,6 +71,7 @@ export class Traffic {
   private impactMass = 0;
   private seed = 47021;
   private spawnTimer = 0;
+  private animationTime = 0;
   private readonly water = new WaterZones();
   readonly signals: TrafficSignals;
 
@@ -202,13 +210,15 @@ export class Traffic {
       this.group.add(model.object);
       const rider=!pedestrian&&this.characters.length?new Rider(this.characters[Math.floor(this.random()*this.characters.length)]!):null;
       if(rider){model.object.add(rider.object);rider.pose(spec);}
-      this.agents.push({ object: model.object, body, collider, controller, mixer, walkAction, idleAction, blend: 0, pedestrian, edge, distance,
+      let walkSpeed=1.7;model.object.traverse(n=>{if(n.userData.walkSpeed>0)walkSpeed=n.userData.walkSpeed;});
+      this.agents.push({ object: model.object, body, collider, controller, mixer, walkAction, idleAction, blend: 0, pedestrian, edge, distance, animationElapsed:0,distanceSquared:0,walkSpeed,footPlant:pedestrian?new FootPlant(model.object):null,footPlantTime:this.animationTime,
         speed: 0, cruise: pedestrian ? 1.65 + this.random() * 0.55 : Math.min(spec.maxSpeed*.7,9 + this.random() * 6), vertical: 0, grounded: false, stalled: 0, nextEdge: null, ownedMaterials, steering: 0, yaw, rider });
       return;
     }
   }
 
   update(dt: number, player: PlayerState): void {
+    this.animationTime+=dt;
     this.signals.update(dt,player.position);
     this.hitByPlayer(player);
     for (let i = this.knocked.length - 1; i >= 0; i--) {
@@ -232,6 +242,10 @@ export class Traffic {
     }
 
     for (const agent of this.agents) {
+      const location = agent.body.translation();
+      agent.distanceSquared=(location.x-player.position.x)**2+(location.z-player.position.z)**2;
+      updateModelLOD(agent.object, agent.distanceSquared);
+      if(agent.rider)updateModelLOD(agent.rider.object,agent.distanceSquared);
       if (!agent.pedestrian) { this.updateCar(agent, dt, player); continue; }
       const t = agent.body.translation();
       const dx = (agent.edge.b.x - agent.edge.a.x) / agent.edge.length;
@@ -276,7 +290,7 @@ export class Traffic {
       }
       agent.controller.computeColliderMovement(agent.collider, {
         x: distance ? deltaX / distance * travel : 0, y: agent.vertical * dt, z: distance ? deltaZ / distance * travel : 0,
-      }, RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC);
+      }, undefined, undefined, other=>!other.isSensor());
       const movement = agent.controller.computedMovement();
       agent.grounded = agent.controller.computedGrounded();
       agent.body.setNextKinematicTranslation({ x: t.x + movement.x, y: t.y + movement.y, z: t.z + movement.z });
@@ -296,8 +310,9 @@ export class Traffic {
         agent.idleAction?.setEffectiveWeight(1 - agent.blend);
         // Qadam uzunligi tezlikka bog'lanadi; turgan holatda turish klipi
         // o'z sur'atida davom etadi, shuning uchun mixer to'xtatilmaydi.
-        agent.walkAction?.setEffectiveTimeScale(Math.max(0.05, pace / 1.4));
-        agent.mixer.update(dt);
+        agent.walkAction?.setEffectiveTimeScale(Math.max(0.05, pace / agent.walkSpeed));
+        agent.animationElapsed+=dt;
+        if(agent.distanceSquared<45*45||agent.animationElapsed>=1/30){agent.mixer.update(agent.animationElapsed);agent.animationElapsed=0;}
       }
     }
   }
@@ -352,7 +367,8 @@ export class Traffic {
     agent.vertical = agent.grounded ? -0.8 : Math.max(-40, agent.vertical - 9.81 * dt);
     agent.body.setRotation({ x: 0, y: Math.sin(agent.yaw/2), z: 0, w: Math.cos(agent.yaw/2) }, true);
     agent.object.rotation.y = agent.yaw;
-    agent.controller.computeColliderMovement(agent.collider, { x: blocked ? 0 : dx, y: agent.vertical * dt, z: blocked ? 0 : dz }, RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC);
+    agent.controller.computeColliderMovement(agent.collider, { x: blocked ? 0 : dx, y: agent.vertical * dt, z: blocked ? 0 : dz }, undefined, undefined,
+      other=>!other.isSensor()&&!other.parent()?.isDynamic());
     const movement = agent.controller.computedMovement();
     agent.grounded = agent.controller.computedGrounded();
     agent.body.setNextKinematicTranslation({ x: t.x+movement.x, y: t.y+movement.y, z: t.z+movement.z });
@@ -362,7 +378,7 @@ export class Traffic {
     if (stopDistance < 1) { agent.stalled = 0; agent.speed = 0; }
     agent.distance = progress;
     animateVehicle(agent.object, movement.x * Math.sin(agent.yaw) + movement.z * Math.cos(agent.yaw), agent.steering);
-    agent.rider?.pose(vehicleSpec(agent.object),actual,agent.steering);
+    agent.rider?.pose(vehicleSpec(agent.object),actual,agent.steering,agent.object.userData.pedalPhase);
   }
 
   render(): void {
@@ -376,7 +392,12 @@ export class Traffic {
     for (const agent of this.agents) {
       const t = agent.body.translation();
       agent.object.position.set(t.x, t.y - (agent.pedestrian ? 0.9 : vehicleSpec(agent.object).half.y), t.z);
-      if (agent.pedestrian) alignCharacterFeet(agent.object, t.y - 0.9);
+      if (agent.pedestrian && agent.distanceSquared<40*40) alignCharacterFeet(agent.object, t.y - 0.9);
+      if(agent.footPlantTime!==this.animationTime){
+        if(agent.pedestrian&&agent.grounded&&agent.blend>.8&&agent.distanceSquared<25*25)agent.footPlant?.update(Math.min(.1,this.animationTime-agent.footPlantTime),(x,z)=>this.ground.heightAt(x,z)+.02);
+        else agent.footPlant?.reset();
+        agent.footPlantTime=this.animationTime;
+      }
       // Match the visible wheels to a mild road slope; physical hull stays stable.
       if (!agent.pedestrian) {
         agent.object.rotation.order = 'YXZ';

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="uz">
+<head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Xarita — 3D ustaxona</title></head>
+<body><div id="studio">
+  <aside>
+    <a class="brand" href="/">XARITA <span>3D USTAXONA</span></a>
+    <p class="eyebrow">KONSEPTDAN O‘YINGA</p>
+    <h1>Harakatga<br>kelgan modellar.</h1>
+    <p class="intro">To‘rtta personaj, ikkita avtomobil. Aylantiring, yaqinlashtiring va animatsiyalarni sinab ko‘ring.</p>
+    <label for="model">MODEL</label><select id="model"><optgroup label="Personajlar"><option value="yigit">01 · Yigit</option><option value="qiz">02 · Qiz</option><option value="ishbilarmon">03 · Ishbilarmon</option><option value="ishchi">04 · Ishchi</option></optgroup><optgroup label="Transport"><option value="sedan">05 · Sedan</option><option value="suv">06 · SUV</option></optgroup></select>
+    <label for="animation">ANIMATSIYA</label><select id="animation"></select>
+    <div class="playback"><button id="play" type="button">To‘xtatish</button><select id="speed" aria-label="Animatsiya tezligi"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option></select></div>
+    <label for="timeline">KADR · <output id="frame-time">0.00 s</output></label><input id="timeline" type="range" min="0" max="1" step="0.001" value="0" aria-label="Animatsiya kadri"/>
+    <div class="views"><button data-view="front">Old</button><button data-view="side">Yon</button><button data-view="back">Orqa</button><button data-view="angle">3/4</button></div>
+    <label class="check"><input id="wire" type="checkbox"/> Geometriyani ko‘rsatish</label>
+    <label class="check"><input id="distant" type="checkbox"/> Uzoqdagi detal darajasi</label>
+    <div class="actions"><a id="download" download>GLB yuklab olish ↗</a><a id="game" href="/?avatar=yigit">O‘yinda sinash →</a></div>
+    <p class="note">Blender’da tayyorlangan modellar. O‘yinda masofaga mos detal, umumiy teksturalar va siqilgan GLB fayllar ishlatiladi.</p>
+  </aside>
+  <main id="viewport"><div class="topline"><span id="model-title">Yigit</span><span id="status" role="status">Yuklanmoqda…</span></div><div class="bottomline"><span>Sichqoncha bilan aylantiring · G‘ildirak bilan yaqinlashtiring</span><span id="stats"></span></div></main>
+</div><script type="module" src="/src/model-studio.ts"></script></body></html>

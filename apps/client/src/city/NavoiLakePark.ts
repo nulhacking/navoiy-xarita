@@ -5,6 +5,7 @@ import type { CityMapData } from './CityTile.ts';
 import { Physics, RAPIER } from './Physics.ts';
 import { waterSurfaceLevel } from './WaterZones.ts';
 import { insidePolygon } from './RoadNetwork.ts';
+import { SpatialGrid } from './SpatialGrid.ts';
 import { assetTrees } from './TreeAssets.ts';
 import { disposeTrees, type TreeMeshes } from './trees.ts';
 import { PARK_BEDS, plantingCandidates, referencePoint, type ReferenceXY } from './LakeReference.ts';
@@ -209,19 +210,24 @@ export class NavoiLakePark {
     this.ribbon([a,b],2.2,0xa69b81,level,true);
   }
   private planting(maps:CityMapData[]) {
-    const obstacles=[...maps.flatMap(m=>[...m.buildings,...m.water,...m.areas.filter(a=>a.cls==='pitch'||a.cls==='parking').map(a=>a.pts)]),...this.map.areas.filter(a=>a.cls==='parking'||a.cls==='pitch').map(a=>a.pts)];
-    const roads=[...maps.flatMap(m=>m.roads),...this.map.roads];
+    // Barcha yuklangan tayllarning to'siq va yo'llari to'rga — har nomzod faqat o'z katagini tekshiradi.
+    const obstacles=new SpatialGrid<Float32Array>(32);
+    for(const ring of [...maps.flatMap(m=>[...m.buildings,...m.water,...m.areas.filter(a=>a.cls==='pitch'||a.cls==='parking').map(a=>a.pts)]),...this.map.areas.filter(a=>a.cls==='parking'||a.cls==='pitch').map(a=>a.pts)])obstacles.insertRing(ring,ring);
+    type Edge={ax:number;az:number;dx:number;dz:number;reach:number};
+    const roads=new SpatialGrid<Edge>(32);
+    for(const road of [...maps.flatMap(m=>m.roads),...this.map.roads]){
+      for(let i=0;i<road.pts.length-2;i+=2){const ax=road.pts[i]!,az=road.pts[i+1]!,dx=road.pts[i+2]!-ax,dz=road.pts[i+3]!-az,reach=road.width/2+2.5;
+        roads.insert({ax,az,dx,dz,reach},Math.min(ax,ax+dx)-reach,Math.min(az,az+dz)-reach,Math.max(ax,ax+dx)+reach,Math.max(az,az+dz)+reach);}
+    }
     const points:Array<{x:number;z:number;scale:number;kind:number;shape:number}>=[];
     for(const bed of PARK_BEDS) {
       for(const {x,y,scale,shape} of plantingCandidates(bed)) {
         const p=this.point(x,y);
-        if(obstacles.some(r=>insidePolygon(p,r))||this.ground.water.contains(p,5))continue;
+        if(obstacles.query(p.x,p.z).some(r=>insidePolygon(p,r))||this.ground.water.contains(p,5))continue;
         if(this.landmarks.clearings.some(c=>Math.hypot(p.x-c.x,p.z-c.z)<c.radius))continue;
-        if(roads.some(road=>{
-          for(let i=0;i<road.pts.length-2;i+=2){const ax=road.pts[i]!,az=road.pts[i+1]!,dx=road.pts[i+2]!-ax,dz=road.pts[i+3]!-az;
-            const t=Math.max(0,Math.min(1,((p.x-ax)*dx+(p.z-az)*dz)/(dx*dx+dz*dz||1)));
-            if(Math.hypot(p.x-ax-dx*t,p.z-az-dz*t)<road.width/2+2.5)return true;}
-          return false;
+        if(roads.query(p.x,p.z).some(({ax,az,dx,dz,reach})=>{
+          const t=Math.max(0,Math.min(1,((p.x-ax)*dx+(p.z-az)*dz)/(dx*dx+dz*dz||1)));
+          return Math.hypot(p.x-ax-dx*t,p.z-az-dz*t)<reach;
         }))continue;
         points.push({x:p.x,z:p.z,scale,kind:0,shape});
       }

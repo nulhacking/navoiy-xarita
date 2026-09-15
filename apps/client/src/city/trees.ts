@@ -16,12 +16,15 @@ import {
 import type { CityMapData } from './CityTile.ts';
 import type { Ground } from './Ground.ts';
 import { insidePolygon } from './RoadNetwork.ts';
+import { SpatialGrid } from './SpatialGrid.ts';
 import { assetTrees } from './TreeAssets.ts';
 import { QUALITY } from './Quality.ts';
 import { props } from './Breakables.ts';
 
 /** Bitta taylda eng ko'p shuncha daraxt. LOD tizimi 300m dan uzoqni yengil meshga aylantiradi. */
 const MAX_TREES = QUALITY.maxTreesPerTile;
+/** To'siq qidiruvi to'rining katagi, metr. */
+const TREE_GRID = 32;
 
 /** Ko'cha bo'ylab daraxtlar orasidagi masofa, metr. */
 const STREET_SPACING = 11;
@@ -82,24 +85,20 @@ export function buildTrees(map: CityMapData, ground: Ground, bounds: TreeBounds,
   // nomzodlar yo'l-yo'l tartibida yig'iladi, ya'ni daraxtlar taylning bir
   // burchagiga to'planib, qolgan qismi bo'sh qolardi. Buning o'rniga bir
   // tekis qadam bilan siyraklashtiramiz — taqsimot saqlanadi.
-  const obstacles = [...map.buildings, ...map.water].map((ring) => {
-    let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
-    for (let i = 0; i < ring.length; i += 2) {
-      minX = Math.min(minX, ring[i]!); maxX = Math.max(maxX, ring[i]!);
-      minZ = Math.min(minZ, ring[i + 1]!); maxZ = Math.max(maxZ, ring[i + 1]!);
+  // To'siq va yo'l segmentlari to'rga: har nomzod faqat o'z katagidagilarni
+  // tekshiradi. Ilgari har nuqta taylning BARCHA bino va segmentlarini
+  // aylanardi — boshlang'ich yuklanishning eng qimmat qismi shu edi.
+  const obstacles = new SpatialGrid<Float32Array>(TREE_GRID);
+  for (const ring of [...map.buildings, ...map.water]) obstacles.insertRing(ring, ring, 2);
+  type Edge = { x: number; z: number; dx: number; dz: number; width: number };
+  const roads = new SpatialGrid<Edge>(TREE_GRID);
+  for (const road of map.roads) {
+    for (let i = 0; i + 3 < road.pts.length; i += 2) {
+      const r: Edge = { x: road.pts[i]!, z: road.pts[i+1]!, dx: road.pts[i+2]!-road.pts[i]!, dz: road.pts[i+3]!-road.pts[i+1]!, width: road.width/2 + 1 };
+      roads.insert(r, Math.min(r.x,r.x+r.dx)-r.width, Math.min(r.z,r.z+r.dz)-r.width, Math.max(r.x,r.x+r.dx)+r.width, Math.max(r.z,r.z+r.dz)+r.width);
     }
-    return { ring, minX, minZ, maxX, maxZ };
-  });
-  const roads = map.roads.flatMap((road) => {
-    const edges: Array<{ x: number; z: number; dx: number; dz: number; width: number }> = [];
-    for (let i = 0; i + 3 < road.pts.length; i += 2) edges.push({
-      x: road.pts[i]!, z: road.pts[i+1]!, dx: road.pts[i+2]!-road.pts[i]!, dz: road.pts[i+3]!-road.pts[i+1]!, width: road.width/2 + 1,
-    });
-    return edges;
-  });
-  const onRoad = (p: { x: number; z: number }) => roads.some((r) => {
-    if (p.x < Math.min(r.x,r.x+r.dx)-r.width || p.x > Math.max(r.x,r.x+r.dx)+r.width ||
-      p.z < Math.min(r.z,r.z+r.dz)-r.width || p.z > Math.max(r.z,r.z+r.dz)+r.width) return false;
+  }
+  const onRoad = (p: { x: number; z: number }) => roads.query(p.x, p.z).some((r) => {
     const t = Math.max(0, Math.min(1, ((p.x-r.x)*r.dx+(p.z-r.z)*r.dz)/(r.dx*r.dx+r.dz*r.dz || 1)));
     return Math.hypot(p.x-r.x-r.dx*t,p.z-r.z-r.dz*t) < r.width;
   });
@@ -107,9 +106,8 @@ export function buildTrees(map: CityMapData, ground: Ground, bounds: TreeBounds,
     !exclude?.(p) &&
     p.x >= bounds.minX && p.x < bounds.maxX && p.z >= bounds.minZ && p.z < bounds.maxZ), MAX_TREES * 2).filter((p) =>
     p.x >= bounds.minX && p.x < bounds.maxX && p.z >= bounds.minZ && p.z < bounds.maxZ &&
-    !onRoad(p) && !obstacles.some((o) =>
-    p.x > o.minX - 2 && p.x < o.maxX + 2 && p.z > o.minZ - 2 && p.z < o.maxZ + 2 &&
-    (insidePolygon(p, o.ring) || insidePolygon({ x: p.x + 2, z: p.z }, o.ring) || insidePolygon({ x: p.x - 2, z: p.z }, o.ring))
+    !onRoad(p) && !obstacles.query(p.x, p.z).some((ring) =>
+    insidePolygon(p, ring) || insidePolygon({ x: p.x + 2, z: p.z }, ring) || insidePolygon({ x: p.x - 2, z: p.z }, ring)
   )).slice(0, MAX_TREES);
   if (!selected.length) return null;
   const imported=assetTrees(selected,(x,z)=>ground.heightAt(x,z));

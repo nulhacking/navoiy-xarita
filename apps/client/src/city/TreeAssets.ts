@@ -1,4 +1,4 @@
-import { Box3, BufferAttribute, Color, ConeGeometry, CylinderGeometry, Group, IcosahedronGeometry, InstancedMesh, LOD, Matrix4, Mesh, MeshStandardMaterial, Quaternion, Vector3, type BufferGeometry, type Material } from 'three';
+import { Box3, BufferAttribute, BufferGeometry, Color, ConeGeometry, CylinderGeometry, Group, IcosahedronGeometry, InstancedMesh, LOD, Matrix4, Mesh, MeshStandardMaterial, Quaternion, Vector3, type Material } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { createGltfLoader } from './GltfLoader.ts';
 import { QUALITY } from './Quality.ts';
@@ -33,6 +33,34 @@ function distantGeometry(crown:BufferGeometry):BufferGeometry {
   const merged=mergeGeometries(geometries)!;for(const g of geometries)g.dispose();return merged;
 }
 const distantTemplates=[distantGeometry(lowRound),distantGeometry(lowPine)];
+type DistantTree={template:BufferGeometry;x:number;y:number;z:number;width:number;height:number;shade:number};
+/**
+ * Uzoq daraxtlarni bitta geometriyaga to'g'ridan-to'g'ri yozadi.
+ * Har daraxt uchun `clone().applyMatrix4()` + `mergeGeometries` bilan bir xil natija,
+ * lekin oraliq geometriyalarsiz: transformatsiya faqat masshtab va siljish, burilish yo'q,
+ * shuning uchun normal matritsasi — shunchaki teskari masshtab.
+ */
+function bakeDistantTrees(trees:DistantTree[]):BufferGeometry {
+  let size=0;for(const t of trees)size+=t.template.getAttribute('position').array.length;
+  const position=new Float32Array(size),normal=new Float32Array(size),color=new Float32Array(size);
+  let o=0;
+  for(const {template,x,y,z,width,height,shade} of trees) {
+    const sp=template.getAttribute('position').array,sn=template.getAttribute('normal').array,sc=template.getAttribute('color').array;
+    const iw=1/width,ih=1/height;
+    for(let i=0;i<sp.length;i+=3) {
+      position[o+i]=sp[i]!*width+x;position[o+i+1]=sp[i+1]!*height+y;position[o+i+2]=sp[i+2]!*width+z;
+      const nx=sn[i]!*iw,ny=sn[i+1]!*ih,nz=sn[i+2]!*iw,l=Math.hypot(nx,ny,nz)||1;
+      normal[o+i]=nx/l;normal[o+i+1]=ny/l;normal[o+i+2]=nz/l;
+      color[o+i]=sc[i]!*shade;color[o+i+1]=sc[i+1]!*shade;color[o+i+2]=sc[i+2]!*shade;
+    }
+    o+=sp.length;
+  }
+  const geometry=new BufferGeometry();
+  geometry.setAttribute('position',new BufferAttribute(position,3));
+  geometry.setAttribute('normal',new BufferAttribute(normal,3));
+  geometry.setAttribute('color',new BufferAttribute(color,3));
+  return geometry;
+}
 export function assetTrees(points:Array<{x:number;z:number;scale:number;shape:number;kind:number}>,heightAt:(x:number,z:number)=>number):LOD[]|null {
   if(!templates.length)return null;
   const chunks=new Map<string,typeof points>();
@@ -41,7 +69,7 @@ export function assetTrees(points:Array<{x:number;z:number;scale:number;shape:nu
   for(const [key,chunk] of chunks) {
     const [cx,cz]=key.split(',').map(Number),ox=(cx!+.5)*200,oz=(cz!+.5)*200,oy=heightAt(ox,oz);
     const lod=new LOD(),high=new Group(),low=new Group();lod.position.set(ox,oy,oz);lod.name='TreeDetailLOD';
-    const distantParts:BufferGeometry[]=[];
+    const distant:DistantTree[]=[];
     for(let variant=0;variant<templates.length;variant++) {
       const selected=chunk.filter(p=>(p.shape===1||p.shape===3?1:0)===variant);if(!selected.length)continue;
       const instances=(part:{geometry:BufferGeometry;material:Material|Material[]},target:Group,imported:boolean)=>{
@@ -65,15 +93,11 @@ export function assetTrees(points:Array<{x:number;z:number;scale:number;shape:nu
         props.add(lod,'tree',p.x,p.z,Math.max(.25,.32*p.scale),h,parts.map(mesh=>({mesh,index:i})));});
       for(const p of selected) {
         const h=p.scale*(p.kind===1?2:variant===1?9:7.5),width=h*(p.shape===3?.46:p.shape===2?1.15:1);
-        const m=new Matrix4().compose(new Vector3(p.x-ox,heightAt(p.x,p.z)-oy,p.z-oz),new Quaternion(),new Vector3(width,h,width));
-        const geometry=distantTemplates[variant]!.clone().applyMatrix4(m),colors=geometry.getAttribute('color');
-        const shade=.76+.23*Math.abs(Math.sin(p.x*.27+p.z*.39));
-        for(let i=0;i<colors.count;i++)colors.setXYZ(i,colors.getX(i)*shade,colors.getY(i)*shade,colors.getZ(i)*shade);
-        distantParts.push(geometry);
+        distant.push({template:distantTemplates[variant]!,x:p.x-ox,y:heightAt(p.x,p.z)-oy,z:p.z-oz,width,height:h,shade:.76+.23*Math.abs(Math.sin(p.x*.27+p.z*.39))});
       }
     }
-    if(distantParts.length){const geometry=mergeGeometries(distantParts)!;for(const part of distantParts)part.dispose();
-      const mesh=new Mesh(geometry,distantMaterial);mesh.name='DistantTrees';mesh.userData.ownedTreeGeometry=true;low.add(mesh);}
+    if(distant.length){
+      const mesh=new Mesh(bakeDistantTrees(distant),distantMaterial);mesh.name='DistantTrees';mesh.userData.ownedTreeGeometry=true;low.add(mesh);}
     lod.addLevel(high,0);lod.addLevel(low,QUALITY.treeDetail(300),.12);lods.push(lod);
   }
   return lods;

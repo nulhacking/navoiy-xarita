@@ -1,3 +1,6 @@
+/** Road bicycle: roughly 5.4 metres of travel per complete pedal revolution. */
+export const BICYCLE_METRES_PER_RADIAN = .86;
+
 export function angleDifference(target: number, current: number): number {
   return Math.atan2(Math.sin(target-current), Math.cos(target-current));
 }

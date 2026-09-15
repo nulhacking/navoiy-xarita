@@ -1,5 +1,4 @@
 import {
-  AnimationMixer,
   BoxGeometry,
   CapsuleGeometry,
   Color,
@@ -7,7 +6,6 @@ import {
   Group,
   Mesh,
   MeshStandardMaterial,
-  type AnimationAction,
   type Object3D,
   PerspectiveCamera,
   Vector3,
@@ -20,12 +18,16 @@ import type { Input } from './Input.ts';
 import { RAPIER, type Physics } from './Physics.ts';
 import type { Breakables } from './Breakables.ts';
 import { angleDifference, approach, yawRate } from './VehicleMotion.ts';
-import { animateVehicle } from './VehicleRig.ts';
+import { animateVehicle, animateVehicleAccessories, renderVehiclePose } from './VehicleRig.ts';
+import { updateModelLOD } from './ModelLOD.ts';
+import { CharacterAnimator } from './CharacterAnimator.ts';
+import { FootPlant } from './FootPlant.ts';
 import { vehicleSpec, VEHICLE_SPECS } from './FleetAssets.ts';
 import { Rider } from './Rider.ts';
+import { VehicleTransitionPose } from './VehicleTransitionPose.ts';
 
-const WALK_SPEED = 4.2;
-const RUN_SPEED = 9;
+const WALK_SPEED = 1.8;
+const RUN_SPEED = 5.2;
 const JUMP_SPEED = 5.2;
 const GRAVITY = -9.81;
 
@@ -135,20 +137,34 @@ export class Player {
   /** Yiqitiladigan jihozlar: to'siq va urilish (`Breakables`). */
   private readonly props: Breakables | undefined;
   private rider: Rider | null = null;
+  private transitionPose: VehicleTransitionPose | null = null;
 
   private readonly avatar: Object3D;
   private car: Object3D;
   private carFootOffset: number;
   private spec = VEHICLE_SPECS[0]!;
   /** Personaj animatsiyasi (model yuklangan bo'lsa). */
-  private mixer: AnimationMixer | null = null;
-  private walkAction: AnimationAction | null = null;
-  private idleAction: AnimationAction | null = null;
-  private runAction: AnimationAction | null = null;
+  private animator: CharacterAnimator | null = null;
+  private vehicleTransition: { kind: 'enter' | 'exit'; elapsed: number; from: Vector3; to: Vector3; side: number; facing: number } | null = null;
+  private entryPath: Vector3[] = [];
+  private entryStalled = 0;
+  private animationTime = 0;
+  private wipers = false;
+  private cameraOrbitHold = 0;
+  private footPlant: FootPlant | null = null;
+  private walkVelocity = new Vector3();
+  // Keep the input basis fixed during a gesture: automatic camera rotation
+  // must never feed back into A/S/D or an analog joystick's world direction.
+  private walkInputYaw = 0;
+  private walkInputActive = false;
+  private walkCameraSpeed = 0;
+  private walkCameraHeading = 0;
+  private readonly velocityChange = new Vector3();
 
   private readonly body: RAPIER.RigidBody;
   private readonly collider: RAPIER.Collider;
   private readonly controller: RAPIER.KinematicCharacterController;
+  private readonly personalSpace = new RAPIER.Capsule(CAPSULE_HALF, CAPSULE_RADIUS + .13);
 
   private readonly carBody: RAPIER.RigidBody;
   private readonly carCollider: RAPIER.Collider;
@@ -163,9 +179,8 @@ export class Player {
 
   /** Avatar qaragan yo'nalish — kameradan mustaqil, yumshoq ergashadi. */
   private facing = 0;
+  private previousFacing = 0;
   /** Turish→yurish va yurish→yugurish aralashuvi, 0..1. */
-  private moveBlend = 0;
-  private runBlend = 0;
 
   /** Kamera burchagi: yaw = gorizontal, pitch = vertikal. */
   private yaw = 0;
@@ -188,6 +203,17 @@ export class Player {
 
   private readonly scratch = new Vector3();
   private readonly cameraTarget = new Vector3();
+  private readonly previousBodyPosition = new Vector3();
+  private readonly previousCarPosition = new Vector3();
+  private readonly visualBodyPosition = new Vector3();
+  private readonly visualCarPosition = new Vector3();
+  private previousCarYaw = 0;
+  private previousCameraYaw = 0;
+  private previousCameraPitch = 0;
+  private previousSteering = 0;
+  private previousPedalPhase = 0;
+  private presentationReset = true;
+  private cameraArmLength = 0;
 
   constructor(options: {
     physics: Physics;
@@ -233,7 +259,9 @@ export class Player {
     this.controller = world.createCharacterController(0.02);
     this.controller.setUp({ x: 0, y: 1, z: 0 });
     // Trotuar qirrasi va zinapoyaga qoqilib qolmaslik uchun.
-    this.controller.enableAutostep(0.5, 0.2, true);
+    this.controller.enableAutostep(0.5, 0.2, false);
+    this.controller.setApplyImpulsesToDynamicBodies(true);
+    this.controller.setCharacterMass(75);
     // Kichik nishabliklarda "sakrab" ketmaslik uchun yerga yopishtirish.
     this.controller.enableSnapToGround(0.4);
     this.controller.setMaxSlopeClimbAngle((50 * Math.PI) / 180);
@@ -242,21 +270,7 @@ export class Player {
     if (options.characterModel) {
       this.avatar = options.characterModel.object;
       const clips = options.characterModel.animations;
-      const clip = clips.find((c) => /Walk$/i.test(c.name)) ?? clips[0];
-      if (clip) {
-        this.mixer = new AnimationMixer(this.avatar);
-        this.walkAction = this.mixer.clipAction(clip);
-        this.walkAction.play();
-        // Turgan holatda animatsiya to'xtaydi: `timeScale` bilan boshqaramiz,
-        // shunda qayta ishga tushirishda poza sakramaydi.
-        this.walkAction.timeScale = 0;
-        const idle = clips.find((c) => /Idle(?:_Neutral)?$/i.test(c.name));
-        const run = clips.find((c) => /Run$/i.test(c.name));
-        if (idle) this.idleAction = this.mixer.clipAction(idle).play();
-        if (run) this.runAction = this.mixer.clipAction(run).play();
-        this.walkAction.setEffectiveWeight(0);
-        this.runAction?.setEffectiveWeight(0);
-      }
+      if (clips.length) { this.animator = new CharacterAnimator(this.avatar, clips); this.footPlant=new FootPlant(this.avatar); this.transitionPose=new VehicleTransitionPose(this.avatar); }
     } else {
       // Zaxira: model yuklanmasa ham o'yin ishlashi kerak.
       const capsule = new Mesh(
@@ -330,9 +344,19 @@ export class Player {
   }
 
   update(dt: number): void {
+    this.previousFacing = this.facing;
+    const body=this.body.translation(),car=this.carBody.translation();
+    this.previousBodyPosition.set(body.x,body.y,body.z);
+    this.previousCarPosition.set(car.x,car.y,car.z);
+    this.previousCarYaw=this.carYaw;this.previousCameraYaw=this.yaw;this.previousCameraPitch=this.pitch;
+    this.previousSteering=this.steering;this.previousPedalPhase=this.car.userData.pedalPhase??0;
     this.updateCamera(dt);
+    this.animationTime += dt;
+    if (this.input.wasPressed('KeyV')) this.wipers = !this.wipers;
+    if (this.input.wasPressed('KeyE') && this.mode === 'walk' && !this.vehicleTransition) this.animator?.wave();
 
-    if (this.input.wasPressed('KeyF')) {
+    if (this.input.wasPressed('KeyF') && !this.vehicleTransition) {
+      this.entryPath = [];
       if (this.mode === 'walk' && this.isNearCar()) {
         const position = this.bodyPosition(this.scratch);
         const ownDistance = Math.hypot(position.x-this.carPosition.x, position.z-this.carPosition.z);
@@ -349,21 +373,59 @@ export class Player {
       else if (this.mode === 'drive') this.exitCar();
     }
 
-    if (this.mode === 'walk') this.updateWalk(dt);
+    if (this.vehicleTransition) {
+      const transition = this.vehicleTransition;
+      transition.elapsed += dt;
+      this.animator?.update(dt, { speed: 0, grounded: true, verticalSpeed: 0, swimming: false }, 'Idle');
+      // Keep the final presentation tick, so a render between ticks never skips the handoff.
+      if (transition.elapsed >= 1.25 + dt) { this.facing=this.carYaw; this.vehicleTransition = null; }
+    } else if (this.mode === 'walk') this.updateWalk(dt);
     this.updateDrive(dt);
+    const progress = this.vehicleTransition ? Math.min(1, this.vehicleTransition.elapsed / 1.25) : 0;
+    animateVehicleAccessories(this.car, {
+      time: this.animationTime, steering: this.steering,
+      brake: this.mode === 'drive' && (this.input.moveAxis().y < 0 || this.input.isDown('Space')),
+      door: this.vehicleTransition ? Math.min(1, progress * 5, (1 - progress) * 5) : 0,
+      doorSide: this.vehicleTransition?.side ?? 1,
+      wipers: this.wipers,
+    });
   }
 
-  render(): void {
+  render(alpha=1,dt=1/60): void {
     const t = this.carBody.translation();
     this.carPosition.set(t.x, t.y, t.z);
-    this.syncMeshes();
-    this.placeCamera();
+    const body=this.body.translation();
+    if(this.presentationReset){
+      this.previousBodyPosition.set(body.x,body.y,body.z);this.previousCarPosition.copy(this.carPosition);
+      this.previousCarYaw=this.carYaw;this.previousCameraYaw=this.yaw;this.previousCameraPitch=this.pitch;
+      this.previousSteering=this.steering;this.previousPedalPhase=this.car.userData.pedalPhase??0;
+      this.cameraArmLength=0;this.presentationReset=false;
+    }
+    alpha=Math.max(0,Math.min(1,alpha));
+    this.visualBodyPosition.set(body.x,body.y,body.z).lerp(this.previousBodyPosition,1-alpha);
+    this.visualCarPosition.copy(this.carPosition).lerp(this.previousCarPosition,1-alpha);
+    const yaw=this.previousCarYaw+angleDifference(this.carYaw,this.previousCarYaw)*alpha;
+    this.animator?.render(alpha);
+    this.avatar.rotation.y = this.previousFacing + angleDifference(this.facing, this.previousFacing) * alpha;
+    this.syncMeshes(this.visualBodyPosition,this.visualCarPosition,yaw,dt,alpha);
+    const steering=this.previousSteering+(this.steering-this.previousSteering)*alpha;
+    const phase=this.previousPedalPhase+angleDifference(this.car.userData.pedalPhase??0,this.previousPedalPhase)*alpha;
+    if(this.mode==='drive'&&!this.vehicleTransition){
+      this.rider?.pose(this.spec,0,steering,phase);
+    }
+    renderVehiclePose(this.car, alpha, steering, phase);
+    this.placeCamera(this.visualBodyPosition,this.visualCarPosition,
+      this.previousCameraYaw+angleDifference(this.yaw,this.previousCameraYaw)*alpha,
+      this.previousCameraPitch+(this.pitch-this.previousCameraPitch)*alpha,dt,alpha);
   }
 
   private updateCamera(dt: number): void {
+    this.cameraOrbitHold=Math.max(0,this.cameraOrbitHold-dt);
     const delta = this.input.takeMouseDelta();
     if (delta.x !== 0 || delta.y !== 0) {
+      this.cameraOrbitHold=1.5;
       this.yaw -= delta.x * 0.0022;
+      if (this.mode === 'walk') this.walkInputYaw -= delta.x * 0.0022;
       this.pitch -= delta.y * 0.0018;
       // Kamera tik yuqoriga yoki pastga aylanib ketmasin.
       this.pitch = Math.min(Math.max(this.pitch, -1.15), 0.55);
@@ -373,16 +435,23 @@ export class Player {
     if (wheel !== 0) {
       this.cameraDistance = Math.min(Math.max(this.cameraDistance + wheel * 0.01, 2.5), 14);
     }
-    if (this.input.isDown('KeyC') && this.mode === 'drive') {
-      const target = this.carYaw + Math.PI;
+    if (this.mode === 'drive' && (this.input.isDown('KeyC') || (!this.vehicleTransition && this.cameraOrbitHold===0 && Math.abs(this.carSpeed)>.7))) {
+      const target = this.carYaw + (this.carSpeed<-.7?0:Math.PI);
       const difference = Math.atan2(Math.sin(target - this.yaw), Math.cos(target - this.yaw));
-      this.yaw += difference * (1 - Math.exp(-2.5 * dt));
+      this.yaw += difference * (1 - Math.exp(-4 * dt));
+    }
+    if (this.mode === 'walk' && !this.vehicleTransition &&
+        (this.input.isDown('KeyC') || (this.cameraOrbitHold === 0 && this.walkCameraSpeed > .15))) {
+      const target = (this.walkCameraSpeed > .15 ? this.walkCameraHeading : this.facing) + Math.PI;
+      this.yaw += angleDifference(target, this.yaw) * (1 - Math.exp(-4 * dt));
     }
   }
 
   private updateWalk(dt: number): void {
     const axis = this.input.moveAxis();
-    const speed = this.input.isDown('ShiftLeft') || this.input.isDown('ShiftRight') ? RUN_SPEED : WALK_SPEED;
+    const jumpPressed=this.input.wasPressed('Space');
+    if (axis.x || axis.y || jumpPressed) this.entryPath = [];
+    const speed = !this.entryPath.length && (this.input.isDown('ShiftLeft') || this.input.isDown('ShiftRight')) ? RUN_SPEED : WALK_SPEED;
 
     // Harakat kamera yo'nalishiga nisbatan.
     //
@@ -391,13 +460,27 @@ export class Player {
     // aynan shu vektor, kameradan UZOQLASHISH tomoni.
     //   oldinga = (-sin,  0, -cos)
     //   o'ngga  = ( cos,  0, -sin)   [oldinga x yuqori]
-    const sin = Math.sin(this.yaw);
-    const cos = Math.cos(this.yaw);
-    const moveX = (axis.x * cos - axis.y * sin) * speed;
-    const moveZ = (-axis.x * sin - axis.y * cos) * speed;
+    const movingInput = Math.hypot(axis.x, axis.y) > .001;
+    if (!this.walkInputActive) this.walkInputYaw = this.yaw;
+    this.walkInputActive = movingInput;
+    const sin = Math.sin(this.walkInputYaw);
+    const cos = Math.cos(this.walkInputYaw);
+    let moveX = (axis.x * cos - axis.y * sin) * speed;
+    let moveZ = (-axis.x * sin - axis.y * cos) * speed;
+    if (this.entryPath.length) {
+      const t=this.body.translation(), next=this.entryPath[0]!, dx=next.x-t.x, dz=next.z-t.z, distance=Math.hypot(dx,dz);
+      if(distance<.12){this.entryPath.shift();if(!this.entryPath.length){this.startBoarding();return;}}
+      else {const pace=Math.min(speed,distance/Math.max(dt,.001));moveX=dx/distance*pace;moveZ=dz/distance*pace;}
+    }
+    // Reach walking pace quickly without translating faster than the first
+    // visible step; release remains crisp instead of coasting across the floor.
+    const change=this.velocityChange.set(moveX,0,moveZ).sub(this.walkVelocity);
+    const limit=(moveX||moveZ?22:30)*dt;
+    this.walkVelocity.addScaledVector(change,Math.min(1,limit/Math.max(change.length(),.0001)));
+    moveX=this.walkVelocity.x;moveZ=this.walkVelocity.z;
 
     // Suvda sakrab bo'lmaydi: chuqurlikda tayanch yo'q.
-    const jump = this.input.wasPressed('Space') && this.submersion < 0.6;
+    const jump = jumpPressed && this.submersion < 0.6;
     if (this.grounded) {
       this.verticalSpeed = jump ? JUMP_SPEED : -0.5;
     } else {
@@ -424,12 +507,13 @@ export class Player {
       this.verticalSpeed = Math.max(-3, Math.min(3, (target - start.y) * BUOYANCY));
     }
 
-    // Qulagan jihoz va NPC bo'laklari (dinamik jismlar) yo'lni to'smaydi — ular suriladi.
+    // Standing and fallen people both block the capsule; excluding all dynamics
+    // previously let the player walk straight through a knocked-down pedestrian.
     this.controller.computeColliderMovement(this.collider, {
       x: moveX * dt * drag,
       y: this.verticalSpeed * dt,
       z: moveZ * dt * drag,
-    }, RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC);
+    }, undefined, undefined, other=>!other.isSensor());
     const movement = this.controller.computedMovement();
     this.grounded = this.controller.computedGrounded();
 
@@ -439,44 +523,39 @@ export class Player {
     const push = this.props?.pushOut(position.x, position.z, CAPSULE_RADIUS);
     if (push) { position.x += push.x; position.z += push.z; }
     this.clampToCity(position, 1);
+    // Query tolerances at terrain seams must never pull the capsule below the
+    // same terrain surface used to draw the road, then pop it up next tick.
+    const floor=this.ground.heightAt(position.x,position.z)+CAPSULE_HALF+CAPSULE_RADIUS+.02;
+    if(position.y<floor && this.verticalSpeed<=0){position.y=floor;this.grounded=true;this.verticalSpeed=0;}
+    // Leave room for the other person's movement during the upcoming physics
+    // tick. This sweep also covers the correction made by decorative obstacles.
+    const delta={x:position.x-start.x,y:position.y-start.y,z:position.z-start.z};
+    const person=this.physics.world.castShape(start,{x:0,y:0,z:0,w:1},delta,this.personalSpace,1,false,
+      undefined,undefined,this.collider,undefined,
+      other=>!other.isSensor()&&other.shape.type===RAPIER.ShapeType.Capsule);
+    if(person){const fraction=Math.max(0,person.toi-.001);position.x=start.x+delta.x*fraction;position.z=start.z+delta.z*fraction;}
     this.body.setNextKinematicTranslation(position);
 
     // Yurayotgan tomonga qarab turishi uchun avatarni buramiz. Burilish
     // BIRDANIGA emas: ilgari `rotation.y` to'g'ridan-to'g'ri qo'yilardi va
     // A/D bosilganda personaj bir kadrda 90° ga o'girilib qolardi.
-    const actualSpeed = Math.hypot(movement.x, movement.z) / Math.max(dt, 1e-6);
+    const actualSpeed = Math.hypot(position.x-start.x, position.z-start.z) / Math.max(dt, 1e-6);
+    this.walkCameraSpeed = actualSpeed;
+    if (actualSpeed > .15) this.walkCameraHeading = Math.atan2(movement.x, movement.z);
+    if(actualSpeed<.05&&Math.hypot(moveX,moveZ)>.1)this.walkVelocity.set(0,0,0);
+    if(this.entryPath.length){this.entryStalled=actualSpeed<.1?this.entryStalled+dt:0;if(this.entryStalled>1)this.entryPath=[];}
     const moving = actualSpeed > 0.08;
     if (moving) {
-      this.facing += angleDifference(Math.atan2(moveX, moveZ), this.facing) * (1 - Math.exp(-16 * dt));
+      this.facing += angleDifference(Math.atan2(movement.x, movement.z), this.facing) * (1 - Math.exp(-16 * dt));
       this.avatar.rotation.y = this.facing;
     }
 
-    if (this.mixer && this.walkAction) {
-      // Uch klip (turish · yurish · yugurish) ORALIQ og'irlik bilan
-      // aralashadi. Avval og'irliklar 0/1 ga sakrardi: Shift bosilgan
-      // lahzada poza "chirt" etib almashardi. Endi aralashish tezlikka
-      // bog'liq va vaqt bo'yicha yumshatilgan.
-      const swimming = this.submersion >= SWIM_DEPTH;
-      const clamp = (value: number) => Math.min(1, Math.max(0, value));
-      const RUN_FROM = WALK_SPEED * 0.9;
-      this.moveBlend = approach(this.moveBlend, clamp(actualSpeed / 1.1), 6, dt);
-      this.runBlend = approach(this.runBlend, clamp((actualSpeed - RUN_FROM) / (RUN_SPEED - RUN_FROM)), 4, dt);
-      const run = this.runAction ? this.runBlend : 0;
-      // Turish klipi bo'lmasa yurish klipi hech qachon nolga tushmaydi —
-      // aks holda personaj to'xtaganda bog'lanish pozasiga (T) qaytib qolardi.
-      this.walkAction.setEffectiveWeight(this.idleAction ? this.moveBlend * (1 - run) : 1 - run);
-      this.idleAction?.setEffectiveWeight(1 - this.moveBlend);
-      this.runAction?.setEffectiveWeight(this.moveBlend * run);
-      // Qadam uzunligi tezlikka bog'lanadi — aks holda "muzda sirg'alish"
-      // effekti chiqadi. Bo'linuvchi — klipning o'z qadam tezligi.
-      this.walkAction.timeScale = moving ? actualSpeed / (swimming ? 0.9 : 1.4) : 0;
-      if (this.runAction) this.runAction.timeScale = moving ? actualSpeed / 5.5 : 0;
-      this.mixer.update(dt);
-    }
+    this.animator?.update(dt, { speed: actualSpeed, grounded: this.grounded, verticalSpeed: this.verticalSpeed, swimming });
   }
 
   private updateDrive(dt: number): void {
-    const axis = this.mode === 'drive' ? this.input.moveAxis() : { x: 0, y: 0 };
+    const axis = this.mode === 'drive' && !this.vehicleTransition ? this.input.moveAxis() : { x: 0, y: 0 };
+    if (this.vehicleTransition || this.entryPath.length) this.carSpeed = 0;
     const current = this.carBody.translation();
     this.carPosition.set(current.x, current.y, current.z);
 
@@ -563,7 +642,8 @@ export class Player {
       z: forwardZ * this.carSpeed * dt,
     };
 
-    this.carController.computeColliderMovement(this.carCollider, desired, RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC);
+    this.carController.computeColliderMovement(this.carCollider, desired, undefined, undefined,
+      other=>!other.isSensor()&&!other.parent()?.isDynamic());
     const movement = this.carController.computedMovement();
     this.carGrounded = this.carController.computedGrounded();
 
@@ -578,13 +658,29 @@ export class Player {
       this.carSpeed = 0;
     }
     this.clampToCity(this.carPosition, 3);
+    const floor=this.ground.heightAt(this.carPosition.x,this.carPosition.z)+this.spec.half.y+.02;
+    if(this.carPosition.y<floor && this.carVerticalSpeed<=0){this.carPosition.y=floor;this.carGrounded=true;this.carVerticalSpeed=0;}
+    if(!floating && this.carVerticalSpeed<=0){
+      // A level kinematic hull can repeatedly autostep on an ordinary incline.
+      // Wheel support rays provide one consistent road height, including curbs.
+      const axle=this.spec.kind==='bicycle'?.585:this.spec.kind==='motorcycle'?.74:1.34;
+      let support=0;
+      for(const sign of [-1,1]){
+        const x=this.carPosition.x+forwardX*axle*sign,z=this.carPosition.z+forwardZ*axle*sign;
+        const origin={x,y:this.carPosition.y+1,z};
+        const hit=this.physics.world.castRay(new RAPIER.Ray(origin,{x:0,y:-1,z:0}),this.spec.half.y+1.6,true,
+          undefined,undefined,this.carCollider,undefined,other=>!other.isSensor()&&(!other.parent()||other.parent()!.isFixed()));
+        support+=hit?origin.y-hit.toi:this.ground.heightAt(x,z);
+      }
+      support=support/2+this.spec.half.y+.02;
+      if(Math.abs(this.carPosition.y-support)<.25){this.carPosition.y=support;this.carVerticalSpeed=0;this.carGrounded=true;}
+    }
     this.carBody.setNextKinematicTranslation(this.carPosition);
 
     // To'siqqa urilganda tezlikni yo'qotamiz: haqiqiy siljish so'ralganidan
     // sezilarli kichik bo'lsa, demak devorga tegdik.
     const actual = Math.hypot(this.carPosition.x - before.x, this.carPosition.z - before.z);
     animateVehicle(this.car, (this.carPosition.x - before.x) * forwardX + (this.carPosition.z - before.z) * forwardZ, this.steering);
-    if(this.mode==='drive')this.rider?.pose(this.spec,actual*Math.sign(this.carSpeed),this.steering);
     const requested = Math.abs(this.carSpeed * dt);
     if (requested > 0.01 && actual < requested * 0.5) this.carSpeed *= 0.25;
   }
@@ -598,25 +694,29 @@ export class Player {
    * Piyoda suzishni biladi, shuning uchun suv chiqish yo'lini to'smasligi kerak.
    */
   private exitCar(): void {
-    const clearance = this.spec.half.x + .9;
-    const sides: Array<[number, number]> = [[clearance, 0], [-clearance, 0], [0, -this.spec.half.z - 1]];
+    const clearance = this.spec.half.x + .55;
+    const sides: Array<[number, number]> = [[clearance, .06], [-clearance, .06], [0, -this.spec.half.z - 1]];
     for (const dry of [true, false]) {
       for (const [side, behind] of sides) {
         const x = this.carPosition.x + Math.cos(this.carYaw) * side + Math.sin(this.carYaw) * behind;
         const z = this.carPosition.z - Math.sin(this.carYaw) * side + Math.cos(this.carYaw) * behind;
         if (dry && this.water.contains({ x, z }, 0.6)) continue;
-        const position = { x, y: this.ground.heightAt(x, z) + CAPSULE_HALF + CAPSULE_RADIUS + 0.15, z };
+        const position = { x, y: this.ground.heightAt(x, z) + CAPSULE_HALF + CAPSULE_RADIUS + 0.02, z };
         const blocked = this.physics.world.intersectionWithShape(position, { x: 0, y: 0, z: 0, w: 1 },
           new RAPIER.Capsule(CAPSULE_HALF, CAPSULE_RADIUS), undefined, undefined, this.collider);
         if (blocked) continue;
         this.mode = 'walk';
+        this.walkVelocity.set(0,0,0); this.walkCameraSpeed=0; this.walkInputActive=false;
+        this.previousBodyPosition.set(position.x,position.y,position.z);
+        this.footPlant?.reset();
+        if (this.animator) this.vehicleTransition = { kind: 'exit', elapsed: 0, from: this.vehicleSeatPosition(), to: new Vector3(position.x, position.y - CAPSULE_HALF - CAPSULE_RADIUS, position.z), side: side<0?-1:1, facing:this.carYaw };
         this.carSpeed = 0;
         this.body.setEnabled(true);
         this.body.setTranslation(position, true);
         this.body.setNextKinematicTranslation(position);
         this.physics.world.updateSceneQueries();
         this.verticalSpeed = 0;
-        this.grounded = false;
+        this.grounded = true;
         return;
       }
     }
@@ -633,6 +733,12 @@ export class Player {
    * Balandlik relyefdan olinadi, tezliklar nolga tushadi.
    */
   teleport(x: number, z: number, carSpawn?: Vector3): void {
+    this.presentationReset=true;
+    this.walkInputActive = false; this.walkCameraSpeed = 0;
+    this.walkVelocity.set(0,0,0);this.cameraOrbitHold=0;
+    this.vehicleTransition = null;
+    this.entryPath = [];
+    this.footPlant?.reset();
     const point = new Vector3(x, 0, z);
     this.clampToCity(point, 10);
     x = point.x;
@@ -681,13 +787,37 @@ export class Player {
   }
 
   private enterCar(): void {
+    const t=this.body.translation(),dx=t.x-this.carPosition.x,dz=t.z-this.carPosition.z,c=Math.cos(this.carYaw),s=Math.sin(this.carYaw);
+    const localX=c*dx-s*dz,localZ=s*dx+c*dz,side=this.spec.half.x+.55;
+    const world=(x:number,z:number)=>new Vector3(this.carPosition.x+c*x+s*z,0,this.carPosition.z-s*x+c*z);
+    this.entryPath=[];this.entryStalled=0;
+    if(localX<0){const end=(localZ>=0?1:-1)*(this.spec.half.z+.8);this.entryPath.push(world(-side,end),world(side,end));}
+    else if(Math.abs(localZ)>this.spec.half.z+.3)this.entryPath.push(world(side,localZ));
+    this.entryPath.push(world(side,.06));
+  }
+
+  private startBoarding(): void {
+    this.walkInputActive = false; this.walkCameraSpeed = 0;
+    this.walkVelocity.set(0,0,0);
+    this.syncMeshes();
+    this.rider?.pose(this.spec,0,0,this.car.userData.pedalPhase);
+    const t=this.body.translation();
+    if (this.animator) this.vehicleTransition = { kind: 'enter', elapsed: 0, from: new Vector3(t.x,t.y-CAPSULE_HALF-CAPSULE_RADIUS,t.z), to: this.vehicleSeatPosition(), side:1, facing:this.facing };
     this.mode = 'drive';
     this.body.setEnabled(false);
-    this.yaw = this.carYaw + Math.PI;
-    this.rider?.pose(this.spec);
+    this.rider?.pose(this.spec,0,0,this.car.userData.pedalPhase);
+  }
+
+  private vehicleSeatPosition(): Vector3 {
+    if(this.rider){this.car.updateMatrixWorld(true);return this.rider.object.children[0]!.getWorldPosition(new Vector3());}
+    const [x, , z] = this.spec.rig.seat;
+    return new Vector3(this.carPosition.x + Math.cos(this.carYaw) * x + Math.sin(this.carYaw) * z,
+      this.carPosition.y - this.carFootOffset + Math.max(.02, this.spec.rig.seat[1] - .48),
+      this.carPosition.z - Math.sin(this.carYaw) * x + Math.cos(this.carYaw) * z);
   }
 
   private adoptVehicle(vehicle: VehicleClaim): void {
+    this.presentationReset=true;
     if(vehicle.object) {
       this.rider?.object.removeFromParent();
       this.releaseVehicle?.({object:this.car,position:this.carPosition.clone(),yaw:this.carYaw,speed:0});
@@ -714,49 +844,79 @@ export class Player {
     return out.set(t.x, t.y, t.z);
   }
 
-  private syncMeshes(): void {
-    const t = this.body.translation();
+  private syncMeshes(t=this.body.translation(),carPosition=this.carPosition,carYaw=this.carYaw,dt=1/60,alpha=1): void {
+    updateModelLOD(this.car, this.mode === 'drive' ? 0 : (t.x-this.carPosition.x)**2 + (t.z-this.carPosition.z)**2);
     // Model oyog'i `y = 0` da (`models.ts` uni shunday markazlaydi), kapsula
     // esa o'z markazida — shuning uchun model kapsulaning TAGIGA qo'yiladi.
-    const footOffset = this.mixer || this.avatar instanceof Group ? CAPSULE_HALF + CAPSULE_RADIUS : 0;
+    const footOffset = this.animator || this.avatar instanceof Group ? CAPSULE_HALF + CAPSULE_RADIUS : 0;
     this.avatar.position.set(t.x, t.y - footOffset, t.z);
-    this.avatar.visible = this.mode === 'walk';
-    if(this.rider)this.rider.object.visible=this.mode==='drive';
-    if (this.mixer && this.avatar.visible) alignCharacterFeet(this.avatar, t.y - footOffset);
+    this.avatar.visible = this.mode === 'walk' || !!this.vehicleTransition;
+    if(this.rider)this.rider.object.visible=this.mode==='drive' && !this.vehicleTransition;
+    if (this.vehicleTransition) {
+      const p = Math.max(0,Math.min(1, (this.vehicleTransition.elapsed-(1-alpha)/60) / 1.25)), phase=Math.max(0,Math.min(1,(p-.16)/.68)), smooth = phase * phase * (3 - 2 * phase);
+      this.avatar.position.lerpVectors(this.vehicleTransition.from, this.vehicleTransition.to, smooth);
+      this.avatar.rotation.y = this.vehicleTransition.facing+angleDifference(this.carYaw,this.vehicleTransition.facing)*Math.min(1,p*4);
+      this.rider?.blendPose(this.avatar,this.vehicleTransition.kind==='enter'?smooth:1-smooth);
+      if(this.rider)this.transitionPose?.apply(this.rider.object,
+        this.vehicleTransition.kind==='enter'?this.vehicleTransition.from:this.vehicleTransition.to,
+        this.vehicleTransition.kind==='enter'?1-smooth:smooth,this.vehicleTransition.side,this.carYaw);
+    } else if (this.animator && this.avatar.visible && this.grounded && this.submersion < SWIM_DEPTH) {
+      const running=this.animator.current==='Run';
+      alignCharacterFeet(this.avatar, t.y-footOffset, running);
+      if(dt>0){
+        if(['Walk','Run'].includes(this.animator.current))this.footPlant?.update(Math.min(.1,dt),(x,z)=>this.ground.heightAt(x,z)+.02);
+        else this.footPlant?.reset();
+      }
+    } else this.footPlant?.reset();
 
-    this.car.position.copy(this.carPosition);
+    this.car.position.copy(carPosition);
     this.car.position.y -= this.carFootOffset;
-    this.car.rotation.y = this.carYaw;
+    this.car.rotation.y = carYaw;
     this.car.rotation.order = 'YXZ';
     if (this.carDepth > CAR_WADE_DEPTH) {
       // Suzayotgan gavda relyef qiyaligini takrorlamaydi — u suv yuzasida tekis yotadi.
-      this.car.rotation.x = approach(this.car.rotation.x, 0, 1.2, 1 / 60);
-      this.car.rotation.z = approach(this.car.rotation.z, 0, 1.2, 1 / 60);
+      this.car.rotation.x = approach(this.car.rotation.x, 0, 1.2, dt);
+      this.car.rotation.z = approach(this.car.rotation.z, 0, 1.2, dt);
     } else if (this.carGrounded) {
-      const dx = Math.sin(this.carYaw) * 1.6, dz = Math.cos(this.carYaw) * 1.6;
-      this.car.rotation.x = -Math.atan2(this.ground.heightAt(this.carPosition.x + dx, this.carPosition.z + dz)
-        - this.ground.heightAt(this.carPosition.x - dx, this.carPosition.z - dz), 3.2);
-      const rx = Math.cos(this.carYaw) * .8, rz = -Math.sin(this.carYaw) * .8;
-      this.car.rotation.z = Math.atan2(this.ground.heightAt(this.carPosition.x + rx, this.carPosition.z + rz)
-        - this.ground.heightAt(this.carPosition.x - rx, this.carPosition.z - rz), 1.6);
+      const wheelHalf=this.spec.kind==='bicycle'?.585:this.spec.kind==='motorcycle'?.74:1.34;
+      const dx = Math.sin(carYaw) * wheelHalf, dz = Math.cos(carYaw) * wheelHalf;
+      const pitch = -Math.atan2(this.ground.heightAt(carPosition.x + dx, carPosition.z + dz)
+        - this.ground.heightAt(carPosition.x - dx, carPosition.z - dz), wheelHalf*2);
+      const rx = Math.cos(carYaw) * .8, rz = -Math.sin(carYaw) * .8;
+      const roll = this.spec.kind==='car'?Math.atan2(this.ground.heightAt(carPosition.x + rx, carPosition.z + rz)
+        - this.ground.heightAt(carPosition.x - rx, carPosition.z - rz), 1.6):
+        Math.max(-.35,Math.min(.35,-Math.atan(this.carSpeed*yawRate(this.carSpeed,this.steering)/9.81)));
+      const blend=1-Math.exp(-12*Math.min(.1,Math.max(0,dt)));
+      this.car.rotation.x+=(pitch-this.car.rotation.x)*blend;
+      this.car.rotation.z+=(roll-this.car.rotation.z)*blend;
     }
   }
 
   /** Kamerani nishon ortiga qo'yadi va devorga kirib ketmasligini ta'minlaydi. */
-  private placeCamera(): void {
+  private placeCamera(bodyPosition=this.body.translation(),carPosition=this.carPosition,yaw=this.yaw,pitch=this.pitch,dt=1/60,alpha=1): void {
     if (this.mode === 'drive') {
-      this.cameraTarget.copy(this.carPosition).add(new Vector3(0, 1.3, 0));
+      this.cameraTarget.copy(carPosition);this.cameraTarget.y+=1.3;
     } else {
-      const t = this.body.translation();
+      const t = bodyPosition;
       this.cameraTarget.set(t.x, t.y + 0.8, t.z);
     }
 
-    const distance = this.mode === 'drive' ? Math.max(this.cameraDistance, 7) : this.cameraDistance;
-    const horizontal = Math.cos(this.pitch) * distance;
-    const vertical = Math.sin(-this.pitch) * distance;
+    if (this.vehicleTransition) {
+      const transition=this.vehicleTransition;
+      const p=Math.max(0,Math.min(1,(transition.elapsed-(1-alpha)/60)/1.25));
+      const blend=p*p*(3-2*p), entering=transition.kind==='enter';
+      const outside=entering?transition.from:transition.to;
+      this.cameraTarget.set(outside.x,outside.y+1.7,outside.z);
+      this.scratch.set(carPosition.x,carPosition.y+1.3,carPosition.z);
+      this.cameraTarget.lerp(this.scratch,entering?blend:1-blend);
+    }
 
-    const offsetX = Math.sin(this.yaw) * horizontal;
-    const offsetZ = Math.cos(this.yaw) * horizontal;
+    const distance = this.mode === 'drive' ? Math.max(this.cameraDistance, 7) : this.cameraDistance;
+    const horizontal = Math.cos(pitch) * distance;
+    const vertical = Math.sin(-pitch) * distance;
+
+    const offsetX = Math.sin(yaw) * horizontal;
+    const offsetZ = Math.cos(yaw) * horizontal;
 
     const desiredX = this.cameraTarget.x + offsetX;
     const desiredZ = this.cameraTarget.z + offsetZ;
@@ -771,7 +931,12 @@ export class Player {
     const hit = this.physics.world.castRay(new RAPIER.Ray(this.cameraTarget, direction), length, true,
       undefined, undefined, undefined, undefined,
       (collider) => collider !== this.collider && collider !== this.carCollider);
-    if (hit) this.camera.position.copy(this.cameraTarget).addScaledVector(direction, Math.max(0.25, hit.toi - 0.3));
+    const allowed=hit?Math.max(.25,hit.toi-.3):length;
+    // Enter obstruction clearance immediately, recover gradually after a pole or
+    // wall edge. Alternating ray hits must not snap the camera in and out.
+    this.cameraArmLength=this.cameraArmLength===0||allowed<this.cameraArmLength?allowed:
+      this.cameraArmLength+(allowed-this.cameraArmLength)*(1-Math.exp(-6*Math.min(.1,dt)));
+    this.camera.position.copy(this.cameraTarget).addScaledVector(direction,this.cameraArmLength);
     this.camera.lookAt(this.cameraTarget);
   }
 
@@ -781,11 +946,11 @@ export class Player {
     this.physics.world.removeCharacterController(this.carController);
     this.physics.world.removeRigidBody(this.body);
     this.physics.world.removeRigidBody(this.carBody);
-    this.mixer?.stopAllAction();
+    this.animator?.dispose();
     this.avatar.traverse((child) => {
       if (child instanceof Mesh) {
         child.geometry.dispose();
-        (child.material as MeshStandardMaterial).dispose();
+        for (const material of Array.isArray(child.material) ? child.material : [child.material]) material.dispose();
       }
     });
     this.car.traverse((child) => {

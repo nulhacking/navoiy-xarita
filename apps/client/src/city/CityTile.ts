@@ -320,6 +320,8 @@ export class CityTile {
     this.detailFocus={x:focus.x,z:focus.z};
     if(this.details){this.group.remove(this.details);disposeCityDetails(this.details);}
     const context=this.detailContext;
+    const b=context.bounds;
+    if(Math.hypot(Math.max(b.minX-focus.x,0,focus.x-b.maxX),Math.max(b.minZ-focus.z,0,focus.z-b.maxZ))>650){this.details=null;return;}
     this.details=buildCityDetails(this.map,context.buildings,context.ground,context.bounds,focus,context.excludeProps);
     this.group.add(this.details);
   }

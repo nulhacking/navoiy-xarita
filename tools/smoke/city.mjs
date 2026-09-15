@@ -31,7 +31,7 @@ try {
     const key = (code, down) => window.dispatchEvent(new KeyboardEvent(down ? 'keydown' : 'keyup', { code }));
     const gap = () => {
       const p = city.playerState;
-      return p.position.y - (p.mode === 'walk' ? 0.9 : 0.7) - city.ground.heightAt(p.position.x, p.position.z);
+      return p.position.y - (p.mode === 'walk' ? 0.9 : city.player.carHalf.y) - city.ground.heightAt(p.position.x, p.position.z);
     };
     tick(2);
     const spawn = city.playerState.position.clone();
@@ -47,7 +47,7 @@ try {
     }
     city.player.teleport(spawn.x, spawn.z);tick(1);
     const runStart=city.playerState.position;
-    key('ShiftLeft',true);key('KeyW',true);tick(1);const runScale=city.player.runAction?.timeScale ?? 0;
+    key('ShiftLeft',true);key('KeyW',true);tick(1);const runScale=city.player.animator?.actions.get('Run')?.timeScale ?? 0;
     key('KeyW',false);key('ShiftLeft',false);
     const runDistance=runStart.distanceTo(city.playerState.position);
     city.player.teleport(spawn.x, spawn.z); tick(1);
@@ -55,12 +55,12 @@ try {
     const jumpGap = gap();
     tick(2);
     const landingGap = gap();
-    key('KeyF', true); key('KeyF', false); tick(0.1);
+    key('KeyF', true); key('KeyF', false); tick(9);
     const entered = city.playerState.mode;
     key('KeyW', true); tick(1.5); key('KeyW', false);
     const carSpeed = city.playerState.speed;
     const carPosition = city.playerState.position.clone();
-    key('KeyF', true); key('KeyF', false); tick(0.1);
+    key('KeyF', true); key('KeyF', false); tick(1.5);
     const exited = city.playerState.mode;
     const exitDistance = city.playerState.position.distanceTo(carPosition);
     tick(12);
@@ -74,7 +74,8 @@ try {
       if (Math.hypot(a.position.x - b.position.x, a.position.z - b.position.z) > 0.5) moved[a.pedestrian ? 'people' : 'cars']++;
     }
     const trafficCounts = city.traffic.counts;
-    const trafficGaps = afterAgents.map((a) => a.position.y - (a.pedestrian ? 0.9 : 0.7) - city.ground.heightAt(a.position.x, a.position.z));
+    const {vehicleSpec}=await import('/src/city/FleetAssets.ts');
+    const trafficGaps = afterAgents.map((a) => {const agent=city.traffic.agents.find(n=>n.body.handle===a.id);return a.position.y-(a.pedestrian?.9:vehicleSpec(agent.object).half.y)-city.ground.heightAt(a.position.x,a.position.z);});
     const p0 = city.playerState.position.clone();
     city.paused = true; key('KeyW', true); tick(1); key('KeyW', false);
     const pausedDistance = p0.distanceTo(city.playerState.position); city.paused = false;
@@ -100,8 +101,8 @@ try {
   await page.screenshot({ path: 'artifacts/navoiy-city.png' });
   assert.ok(result.grounded && Math.abs(result.groundGap) < 0.12, 'Feet should rest on ground');
   assert.ok(Math.max(...result.distances) - Math.min(...result.distances) < 0.08, 'Movement must be frame-rate independent');
-  assert.ok(Math.min(...result.distances) > 2.5, 'Walking must move the player');
-  assert.ok(result.runDistance>8.5&&result.runDistance<9.5&&result.runScale>1.5,'Run speed and animation must stay synchronized');
+  assert.ok(Math.min(...result.distances) > 1.65 && Math.max(...result.distances)<1.95, 'Walking should cover 1.8 metres per second');
+  assert.ok(result.runDistance>4.5&&result.runDistance<4.85&&result.runScale>1.3&&result.runScale<1.7,'Run acceleration and captured stride must stay synchronized');
   assert.ok(result.jumpGap > 0.6 && Math.abs(result.landingGap) < 0.12, 'Quick jump tap must take off and land');
   assert.equal(result.entered, 'drive'); assert.equal(result.exited, 'walk');
   assert.ok(result.carSpeed > 1 && result.exitDistance > 1 && result.exitDistance < 5, 'Driving/exit position');

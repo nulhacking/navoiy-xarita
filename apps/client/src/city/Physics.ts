@@ -21,6 +21,8 @@ const MAX_STEPS = LOW_QUALITY ? 3 : 6;
 export class Physics {
   readonly world: RAPIER.World;
   private accumulator = 0;
+  /** Render between the two most recent fixed steps, without extrapolating through walls. */
+  get interpolationAlpha():number { return Math.max(0,Math.min(1,this.accumulator/FIXED_STEP)); }
   private readonly tileColliders = new Map<string, RAPIER.Collider>();
   private readonly staticBody: RAPIER.RigidBody;
 
