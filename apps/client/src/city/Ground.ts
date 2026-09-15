@@ -378,11 +378,25 @@ function carveWater(
   }
 }
 
+/**
+ * Shahar to'rtburchagini qoplaydigan DEM tayllari, tekis massivda. Relyef
+ * qurishda piksel ~6 mln marta o'qiladi: ilgari har o'qishda `"x/y"` satr
+ * kaliti yasalib `Map` dan qidirilardi va bu yuklanishning ~2 soniyasini olardi.
+ */
+interface DemTiles {
+  x0: number;
+  y0: number;
+  columns: number;
+  rows: number;
+  /** `(ty - y0) * columns + (tx - x0)`; tayl kelmagan bo'lsa `null`. */
+  tiles: Array<Float32Array | null>;
+}
+
 /** Shahar to'rtburchagini qoplaydigan DEM tayllarini yuklaydi. */
 async function loadDemTiles(
   bbox: [number, number, number, number],
   source: TerrainSource,
-): Promise<Map<string, HeightGrid>> {
+): Promise<DemTiles> {
   const [south, west, north, east] = bbox;
   const n = 2 ** DEM_ZOOM;
   const x0 = Math.floor(lonToMercatorX(west) * n);
@@ -390,19 +404,16 @@ async function loadDemTiles(
   const y0 = Math.floor(latToMercatorY(north) * n);
   const y1 = Math.floor(latToMercatorY(south) * n);
 
-  const jobs: Promise<[string, HeightGrid | null]>[] = [];
-  for (let x = x0; x <= x1; x++) {
-    for (let y = y0; y <= y1; y++) {
+  const jobs: Promise<HeightGrid | null>[] = [];
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
       const coord: TileCoord = { z: DEM_ZOOM, x, y };
-      jobs.push(source.get(coord).then((grid) => [`${x}/${y}`, grid] as [string, HeightGrid | null]));
+      jobs.push(source.get(coord));
     }
   }
 
-  const grids = new Map<string, HeightGrid>();
-  for (const [key, grid] of await Promise.all(jobs)) {
-    if (grid) grids.set(key, grid);
-  }
-  return grids;
+  const tiles = (await Promise.all(jobs)).map((grid) => grid?.data ?? null);
+  return { x0, y0, columns: x1 - x0 + 1, rows: y1 - y0 + 1, tiles };
 }
 
 /**
@@ -415,38 +426,39 @@ async function loadDemTiles(
  * Tayl kelmagan bo'lsa `NaN`: chaqiruvchi uni o'rtachadan chiqarib tashlaydi,
  * shunda bitta yetishmagan tayl butun chekkani dengiz sathiga tortmaydi.
  */
-function demPixel(grids: Map<string, HeightGrid>, px: number, py: number): number {
+function demPixel(grids: DemTiles, px: number, py: number): number {
   const size = TERRAIN_SOURCE.tileSize;
   const tx = Math.floor(px / size);
   const ty = Math.floor(py / size);
-  const grid = grids.get(`${tx}/${ty}`);
-  if (!grid) return NaN;
+  const column = tx - grids.x0, row = ty - grids.y0;
+  if (column < 0 || row < 0 || column >= grids.columns || row >= grids.rows) return NaN;
+  const data = grids.tiles[row * grids.columns + column];
+  if (!data) return NaN;
   const ix = Math.min(size - 1, Math.max(0, Math.floor(px) - tx * size));
   const iy = Math.min(size - 1, Math.max(0, Math.floor(py) - ty * size));
-  return grid.data[iy * size + ix]!;
+  return data[iy * size + ix]!;
 }
 
 /** Global piksel koordinatasida bilinear namuna. */
-function demBilinear(grids: Map<string, HeightGrid>, px: number, py: number): number {
+function demBilinear(grids: DemTiles, px: number, py: number): number {
   const fx = px - 0.5;
   const fy = py - 0.5;
   const x0 = Math.floor(fx);
   const y0 = Math.floor(fy);
   const tx = fx - x0;
   const ty = fy - y0;
-  const corners: Array<[number, number]> = [
-    [demPixel(grids, x0, y0), (1 - tx) * (1 - ty)],
-    [demPixel(grids, x0 + 1, y0), tx * (1 - ty)],
-    [demPixel(grids, x0, y0 + 1), (1 - tx) * ty],
-    [demPixel(grids, x0 + 1, y0 + 1), tx * ty],
-  ];
+  // Massiv yaratilmaydi: bu funksiya relyef qurishda millionlab marta chaqiriladi.
+  // Burchaklar tartibi avvalgidek — yig'indi bitma-bit bir xil chiqadi.
   let sum = 0;
   let weight = 0;
-  for (const [height, w] of corners) {
-    if (Number.isNaN(height)) continue;
-    sum += height * w;
-    weight += w;
-  }
+  let height = demPixel(grids, x0, y0), w = (1 - tx) * (1 - ty);
+  if (!Number.isNaN(height)) { sum += height * w; weight += w; }
+  height = demPixel(grids, x0 + 1, y0); w = tx * (1 - ty);
+  if (!Number.isNaN(height)) { sum += height * w; weight += w; }
+  height = demPixel(grids, x0, y0 + 1); w = (1 - tx) * ty;
+  if (!Number.isNaN(height)) { sum += height * w; weight += w; }
+  height = demPixel(grids, x0 + 1, y0 + 1); w = tx * ty;
+  if (!Number.isNaN(height)) { sum += height * w; weight += w; }
   return weight > 0 ? sum / weight : NaN;
 }
 
@@ -467,7 +479,7 @@ const TENT_WEIGHTS = TENT_OFFSETS.map((offset) => 1 - Math.abs(offset));
  * OLDIN olib tashlaydi, keyin siyraklashtiradi.
  */
 function sampleDemCell(
-  grids: Map<string, HeightGrid>,
+  grids: DemTiles,
   px: number,
   py: number,
   stepX: number,

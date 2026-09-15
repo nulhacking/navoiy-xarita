@@ -1,7 +1,6 @@
 import { QUALITY } from '../city/Quality.ts';
 import {
   ACESFilmicToneMapping,
-  Clock,
   PerspectiveCamera,
   Scene,
   SRGBColorSpace,
@@ -42,7 +41,7 @@ export class Engine {
   readonly camera: PerspectiveCamera;
   readonly canvas: HTMLCanvasElement;
 
-  private readonly clock = new Clock();
+  private lastFrameTime: number | null = null;
   private readonly systems: System[] = [];
   private readonly resizeObserver: ResizeObserver;
   private animationId: number | null = null;
@@ -102,10 +101,10 @@ export class Engine {
 
   start(): void {
     if (this.animationId !== null || this.disposed) return;
-    this.clock.start();
-    const tick = () => {
+    this.lastFrameTime = null;
+    const tick = (time: number) => {
       this.animationId = requestAnimationFrame(tick);
-      this.update();
+      this.update(time);
     };
     this.animationId = requestAnimationFrame(tick);
   }
@@ -115,13 +114,18 @@ export class Engine {
       cancelAnimationFrame(this.animationId);
       this.animationId = null;
     }
-    this.clock.stop();
+    this.lastFrameTime = null;
   }
 
-  private update(): void {
+  private update(time: number): void {
+    // Vaqt rAF bergan kadr boshlanish vaqtidan olinadi. `performance.now()`
+    // callback ishga tushgan lahzani o'lchaydi va u har kadrda bir necha ms
+    // tebranadi — interpolyatsiya shu xatoni harakatga aylantirib, yurganda
+    // va ayniqsa mashinada tasvir qaltirardi.
+    const wallDt = this.lastFrameTime === null ? 0 : Math.max(0, time - this.lastFrameTime) / 1000;
+    this.lastFrameTime = time;
     // Tab fon rejimiga o'tib qaytganda dt bir necha sekund bo'lishi mumkin —
     // bu fizikani portlatadi, shuning uchun 250 ms ga cheklaymiz.
-    const wallDt = this.clock.getDelta();
     const dt = Math.min(wallDt, 0.25);
     this.elapsed += dt;
     this.frame++;

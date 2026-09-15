@@ -195,9 +195,9 @@ function emptyMapData(): CityMapData {
 export class CityTile {
   readonly coord: TileCoord;
   readonly group = new Group();
-  readonly stats: CityTileParts;
+  stats: CityTileParts = { buildings: 0, triangles: 0 };
   /** Devor geometriyasi — fizika collideri shundan quriladi. */
-  readonly wallPositions: Float32Array | null;
+  wallPositions: Float32Array | null = null;
   /** Mini-xarita uchun 2D konturlar. */
   readonly map: CityMapData;
 
@@ -208,7 +208,11 @@ export class CityTile {
   private detailFocus={x:Infinity,z:Infinity};
   private disposed = false;
 
-  constructor(coord: TileCoord, data: OsmTileData, frame: CityFrame, ground: Ground) {
+  /**
+   * @param deferred `true` bo'lsa geometriya konstruktorda qurilmaydi —
+   *   `buildInSteps` uni bosqichma-bosqich, orada kadr berib quradi.
+   */
+  constructor(coord: TileCoord, data: OsmTileData, frame: CityFrame, ground: Ground, deferred = false) {
     this.coord = coord;
     this.map = emptyMapData();
     const c0: number[] = [0, 0, 0];
@@ -236,7 +240,34 @@ export class CityTile {
       excludeProps: (p) => excludeXd(p) || excludeFarxod(p),
     };
     this.detailContext=context;
+    const treeExclusion = (p: { x: number; z: number }) => excludeLake(p)||excludeHokimiyat(p)||excludeFarxod(p)||excludeSoftex(p)||excludeXd(p);
+    this.pending = this.build(data, context, ground, treeExclusion);
+    if (!deferred) this.buildInSteps();
+  }
 
+  private pending: Generator<void> | null;
+
+  /**
+   * Qurilmagan bosqichlarni bajaradi. `pause` berilsa har bosqichdan keyin
+   * uni kutadi: fonda qurilayotgan tayl bitta kadrni ~0.25 s egallab, o'yinni
+   * qotirib qo'ymaydi, eng uzun bosqich (yo'llar) atrofida bo'linadi.
+   */
+  buildInSteps(): void;
+  buildInSteps(pause: () => Promise<void>, alive: () => boolean): Promise<void>;
+  buildInSteps(pause?: () => Promise<void>, alive?: () => boolean): void | Promise<void> {
+    const steps = this.pending;
+    this.pending = null;
+    if (!steps) return pause ? Promise.resolve() : undefined;
+    if (!pause) { for (const _ of steps); return; }
+    return (async () => {
+      for (const _ of steps) {
+        await pause();
+        if (!alive!()) return;
+      }
+    })();
+  }
+
+  private *build(data: OsmTileData, context: Context, ground: Ground, treeExclusion: (p: { x: number; z: number }) => boolean): Generator<void> {
     let triangles = 0;
 
     // Tartib muhim: yuza -> suv -> yo'l. Ular deyarli bir tekislikda yotadi,
@@ -245,6 +276,7 @@ export class CityTile {
       triangles += geometry.getAttribute('position').count / 3;
       this.addMesh(geometry, surfaceMaterial(layer, { vertexColors: true, roughness: 1 })).receiveShadow = true;
     }
+    yield;
 
     const water = buildWater(data, context);
     if (water) {
@@ -265,6 +297,7 @@ export class CityTile {
         surfaceMaterial(layer, { vertexColors: true, map: isGrass ? null : asphaltTexture(), roughness: isGrass ? 1 : 0.95 }),
       ).receiveShadow = true;
     }
+    yield;
 
     const built = buildBuildings(data, context);
     if (built) {
@@ -297,18 +330,24 @@ export class CityTile {
       roofs.castShadow = true;
       roofs.receiveShadow = true;
     }
+    if (built) {
+      // Massivlar yoyib (`...`) emas, to'g'ridan-to'g'ri nusxalanadi: yuz
+      // minglab raqamni yoyish sezilarli sekin edi.
+      const roofPositions = built.roofs.getAttribute('position').array;
+      this.wallPositions = new Float32Array(built.wallPositions.length + roofPositions.length);
+      this.wallPositions.set(built.wallPositions);
+      this.wallPositions.set(roofPositions, built.wallPositions.length);
+    }
+    yield;
 
     // Daraxtlar oxirida: ular yo'l va yuza konturlariga tayanadi, ular esa
     // yuqoridagi qadamlarda `context.map` ga yig'ilgan.
-    this.trees = buildTrees(this.map, ground, context.bounds, p=>excludeLake(p)||excludeHokimiyat(p)||excludeFarxod(p)||excludeSoftex(p)||excludeXd(p));
+    this.trees = buildTrees(this.map, ground, context.bounds, treeExclusion);
     if (this.trees) {
       this.group.add(...this.trees.meshes);
       triangles += this.trees.count * 12;
     }
 
-    this.wallPositions = built
-      ? new Float32Array([...built.wallPositions, ...built.roofs.getAttribute('position').array])
-      : null;
     this.stats = { buildings: data.buildings.length, triangles: Math.round(triangles) };
   }
 
@@ -1162,30 +1201,40 @@ function setPoint(out: number[], x: number, z: number, context: Context, lift: n
 function pushTerrainTriangle(out: number[], a: number[], b: number[], c: number[], context: Context, lift: number): number {
   const { ground } = context;
   const { bounds, spacingX: sx, spacingZ: sz } = ground;
-  const poly = [a, b, c].map((p) => [p[0]!, p[2]!] as [number, number]);
-  const xs = poly.map((p) => p[0]), zs = poly.map((p) => p[1]);
-  const x0 = Math.max(0, Math.floor((Math.min(...xs) - bounds.minX) / sx));
-  const x1 = Math.min(ground.gridSize - 2, Math.floor((Math.max(...xs) - bounds.minX) / sx));
-  const z0 = Math.max(0, Math.floor((Math.min(...zs) - bounds.minZ) / sz));
-  const z1 = Math.min(ground.gridSize - 2, Math.floor((Math.max(...zs) - bounds.minZ) / sz));
+  const poly: Array<[number, number]> = [[a[0]!, a[2]!], [b[0]!, b[2]!], [c[0]!, c[2]!]];
+  // Bu funksiya tayl qurishda o'n minglab marta chaqiriladi: chegaralar bir
+  // marta hisoblanadi, ichki siklda massiv/yopilma yaratilmaydi. Natija
+  // avvalgisi bilan bitma-bit bir xil.
+  const minX = Math.min(a[0]!, b[0]!, c[0]!), maxX = Math.max(a[0]!, b[0]!, c[0]!);
+  const minZ = Math.min(a[2]!, b[2]!, c[2]!), maxZ = Math.max(a[2]!, b[2]!, c[2]!);
+  const x0 = Math.max(0, Math.floor((minX - bounds.minX) / sx));
+  const x1 = Math.min(ground.gridSize - 2, Math.floor((maxX - bounds.minX) / sx));
+  const z0 = Math.max(0, Math.floor((minZ - bounds.minZ) / sz));
+  const z1 = Math.min(ground.gridSize - 2, Math.floor((maxZ - bounds.minZ) / sz));
   const before = out.length;
+  const va = [0, 0, 0], vb = [0, 0, 0], vc = [0, 0, 0];
+  const vertex = (v: number[], p: [number, number]) => { v[0] = p[0]; v[1] = ground.heightAt(p[0], p[1]) + lift; v[2] = p[1]; };
   for (let row = z0; row <= z1; row++) for (let col = x0; col <= x1; col++) {
     const divisions=ground.detail?.ownsCell(col,row)?ground.detail.divisions:1;
     const cellX=bounds.minX+col*sx,cellZ=bounds.minZ+row*sz;
     const dx=sx/divisions,dz=sz/divisions;
-    const subX0=Math.max(0,Math.floor((Math.min(...xs)-cellX)/dx)),subX1=Math.min(divisions-1,Math.floor((Math.max(...xs)-cellX)/dx));
-    const subZ0=Math.max(0,Math.floor((Math.min(...zs)-cellZ)/dz)),subZ1=Math.min(divisions-1,Math.floor((Math.max(...zs)-cellZ)/dz));
+    const subX0=Math.max(0,Math.floor((minX-cellX)/dx)),subX1=Math.min(divisions-1,Math.floor((maxX-cellX)/dx));
+    const subZ0=Math.max(0,Math.floor((minZ-cellZ)/dz)),subZ1=Math.min(divisions-1,Math.floor((maxZ-cellZ)/dz));
     for(let sr=subZ0;sr<=subZ1;sr++)for(let sc=subX0;sc<=subX1;sc++) {
     const x=cellX+sc*dx,z=cellZ+sr*dz;
-    let clipped = clip(poly, (p) => p[0] - x);
-    clipped = clip(clipped, (p) => x + dx - p[0]);
-    clipped = clip(clipped, (p) => p[1] - z);
-    clipped = clip(clipped, (p) => z + dz - p[1]);
-    for (const side of [-1, 1]) {
-      const half = clip(clipped, (p) => side * ((p[0] - x) / dx + (p[1] - z) / dz - 1));
+    // Uchburchak katak ichida to'liq yotsa, to'rtta qirqish uni o'zgartirmaydi.
+    let clipped = poly;
+    if (!(minX >= x && maxX <= x + dx && minZ >= z && maxZ <= z + dz)) {
+      clipped = clipAxis(clipped, 0, 1, x, 0);
+      clipped = clipAxis(clipped, 0, -1, x, dx);
+      clipped = clipAxis(clipped, 1, 1, z, 0);
+      clipped = clipAxis(clipped, 1, -1, z, dz);
+    }
+    for (let side = -1; side <= 1; side += 2) {
+      const half = clipDiagonal(clipped, side, x, z, dx, dz);
       for (let i = 1; i + 1 < half.length; i++) {
-        const vertices = [half[0]!, half[i]!, half[i + 1]!].map((p) => [p[0], ground.heightAt(p[0], p[1]) + lift, p[1]]);
-        pushUpFacing(out, vertices[0]!, vertices[1]!, vertices[2]!);
+        vertex(va, half[0]!); vertex(vb, half[i]!); vertex(vc, half[i + 1]!);
+        pushUpFacing(out, va, vb, vc);
       }
     }
     }
@@ -1193,13 +1242,36 @@ function pushTerrainTriangle(out: number[], a: number[], b: number[], c: number[
   return (out.length - before) / 3;
 }
 
-function clip(polygon: Array<[number, number]>, distance: (p: [number, number]) => number): Array<[number, number]> {
+/**
+ * `clip` ning o'q bo'yicha varianti, yopilmasiz. `sign = 1`: `p - origin`,
+ * `sign = -1`: `origin + size - p` — ifodalar avvalgi yopilmalardagi bilan aynan bir xil.
+ */
+function clipAxis(polygon: Array<[number, number]>, axis: 0 | 1, sign: 1 | -1, origin: number, size: number): Array<[number, number]> {
   const out: Array<[number, number]> = [];
   if (!polygon.length) return out;
+  const distance = (p: [number, number]) => sign === 1 ? p[axis] - origin : origin + size - p[axis];
   let previous = polygon[polygon.length - 1]!;
   let d0 = distance(previous);
   for (const current of polygon) {
     const d1 = distance(current);
+    if ((d0 >= 0) !== (d1 >= 0)) {
+      const t = d0 / (d0 - d1);
+      out.push([previous[0] + (current[0] - previous[0]) * t, previous[1] + (current[1] - previous[1]) * t]);
+    }
+    if (d1 >= 0) out.push(current);
+    previous = current; d0 = d1;
+  }
+  return out;
+}
+
+/** Katakni b--c diagonali bo'yicha ikkiga bo'luvchi qirqish. */
+function clipDiagonal(polygon: Array<[number, number]>, side: number, x: number, z: number, dx: number, dz: number): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  if (!polygon.length) return out;
+  let previous = polygon[polygon.length - 1]!;
+  let d0 = side * ((previous[0] - x) / dx + (previous[1] - z) / dz - 1);
+  for (const current of polygon) {
+    const d1 = side * ((current[0] - x) / dx + (current[1] - z) / dz - 1);
     if ((d0 >= 0) !== (d1 >= 0)) {
       const t = d0 / (d0 - d1);
       out.push([previous[0] + (current[0] - previous[0]) * t, previous[1] + (current[1] - previous[1]) * t]);

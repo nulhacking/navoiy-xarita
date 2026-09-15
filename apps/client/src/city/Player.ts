@@ -642,8 +642,9 @@ export class Player {
       z: forwardZ * this.carSpeed * dt,
     };
 
-    this.carController.computeColliderMovement(this.carCollider, desired, undefined, undefined,
-      other=>!other.isSensor()&&!other.parent()?.isDynamic());
+    // Filtr Rapier bayroqlarida: JS predikati har kollayder uchun WASM chaqiruvi edi.
+    this.carController.computeColliderMovement(this.carCollider, desired,
+      RAPIER.QueryFilterFlags.EXCLUDE_SENSORS | RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC);
     const movement = this.carController.computedMovement();
     this.carGrounded = this.carController.computedGrounded();
 
@@ -669,7 +670,8 @@ export class Player {
         const x=this.carPosition.x+forwardX*axle*sign,z=this.carPosition.z+forwardZ*axle*sign;
         const origin={x,y:this.carPosition.y+1,z};
         const hit=this.physics.world.castRay(new RAPIER.Ray(origin,{x:0,y:-1,z:0}),this.spec.half.y+1.6,true,
-          undefined,undefined,this.carCollider,undefined,other=>!other.isSensor()&&(!other.parent()||other.parent()!.isFixed()));
+          RAPIER.QueryFilterFlags.EXCLUDE_SENSORS|RAPIER.QueryFilterFlags.EXCLUDE_KINEMATIC|RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC,
+          undefined,this.carCollider);
         support+=hit?origin.y-hit.toi:this.ground.heightAt(x,z);
       }
       support=support/2+this.spec.half.y+.02;

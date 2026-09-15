@@ -165,8 +165,9 @@ export class Physics {
       this.accumulator -= FIXED_STEP;
       steps++;
     }
-    // Juda ko'p qarzdorlik yig'ilib qolsa (tab fonda turgan) — tashlab yuboramiz.
-    if (steps === MAX_STEPS) this.accumulator = 0;
+    // Qarzdorlik kirishda `MAX_STEPS` bilan cheklangan, shuning uchun bu yerda
+    // qoldiq doim bitta qadamdan kichik. Uni nolga tushirish kerak emas: sekin
+    // telefonda interpolyatsiya ulushi yo'qolib, harakat sakrab qolardi.
     return steps;
   }
 

@@ -49,7 +49,8 @@ function bakeDistantTrees(trees:DistantTree[]):BufferGeometry {
     const iw=1/width,ih=1/height;
     for(let i=0;i<sp.length;i+=3) {
       position[o+i]=sp[i]!*width+x;position[o+i+1]=sp[i+1]!*height+y;position[o+i+2]=sp[i+2]!*width+z;
-      const nx=sn[i]!*iw,ny=sn[i+1]!*ih,nz=sn[i+2]!*iw,l=Math.hypot(nx,ny,nz)||1;
+      // Math.hypot o'zgaruvchan argumentli va bu siklda yuklanishning ~0.5 s ini olardi.
+      const nx=sn[i]!*iw,ny=sn[i+1]!*ih,nz=sn[i+2]!*iw,l=Math.sqrt(nx*nx+ny*ny+nz*nz)||1;
       normal[o+i]=nx/l;normal[o+i+1]=ny/l;normal[o+i+2]=nz/l;
       color[o+i]=sc[i]!*shade;color[o+i+1]=sc[i+1]!*shade;color[o+i+2]=sc[i+2]!*shade;
     }

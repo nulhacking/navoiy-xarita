@@ -257,6 +257,9 @@ export class Sky {
   private readonly horizon = new Color();
   private readonly keyColor = new Color();
   private readonly scratch = new Vector3();
+  private readonly shadowOrigin = new Vector3();
+  private readonly shadowRight = new Vector3();
+  private readonly shadowUp = new Vector3();
 
   constructor(scene: Scene, renderer: WebGLRenderer) {
     this.scene = scene;
@@ -360,12 +363,17 @@ export class Sky {
       this.key.intensity = 0.42 * moonLight;
     }
     this.key.color.copy(this.keyColor);
-    this.key.target.position.copy(origin);
-    this.key.target.updateMatrixWorld();
     // Yo'naltirilgan chiroqning o'zi cheksiz uzoqda, lekin uning SOYA
     // KAMERASI cheklangan maydonni qamraydi — shuning uchun u doim
     // kuzatuv nuqtasi ustida turishi kerak.
-    this.key.position.copy(origin).addScaledVector(this.scratch, 600);
+    //
+    // Kamera soya xaritasining bitta texeli qadamida ko'chadi. Ilgari u
+    // o'yinchi bilan har kadrda texeldan kichik masofaga surilardi va
+    // yurganda yoki mashinada barcha soya qirralari titrab turardi.
+    const shadowOrigin = this.snapToShadowTexel(origin, this.scratch);
+    this.key.target.position.copy(shadowOrigin);
+    this.key.target.updateMatrixWorld();
+    this.key.position.copy(shadowOrigin).addScaledVector(this.scratch, 600);
 
     // --- Muhit yorug'ligi
     this.ambient.color.copy(NIGHT_SKY).lerp(DAY_SKY, daylight);
@@ -377,6 +385,23 @@ export class Sky {
     this.refreshEnvironment(sun.altitude);
 
     return { date, sun, moon, daylight };
+  }
+
+  /**
+   * Nuqtani soya kamerasi tekisligida (chiroqqa tik) texel to'riga keltiradi.
+   * Nur yo'nalishi bo'yicha siljish soyaga ta'sir qilmaydi — u tegilmaydi.
+   */
+  private snapToShadowTexel(origin: Vector3, toLight: Vector3): Vector3 {
+    const texel = (SHADOW_EXTENT * 2) / this.key.shadow.mapSize.x;
+    // Object3D.lookAt bilan bir xil bazis: z = chiroqqa, x = up × z, y = z × x.
+    this.shadowRight.set(0, 1, 0).cross(toLight);
+    if (this.shadowRight.lengthSq() < 1e-8) this.shadowRight.set(1, 0, 0);
+    this.shadowRight.normalize();
+    this.shadowUp.crossVectors(toLight, this.shadowRight).normalize();
+    const right = origin.dot(this.shadowRight), up = origin.dot(this.shadowUp);
+    return this.shadowOrigin.copy(origin)
+      .addScaledVector(this.shadowRight, Math.round(right / texel) * texel - right)
+      .addScaledVector(this.shadowUp, Math.round(up / texel) * texel - up);
   }
 
   /** Muhit xaritasini quyosh sezilarli siljiganda qayta pishiradi. */

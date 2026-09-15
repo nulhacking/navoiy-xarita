@@ -7,7 +7,7 @@ import type { PlayerState, VehicleClaim } from './Player.ts';
 import { insidePolygon, lanePoint, projectToEdge, RoadNetwork, type PointXZ, type RoadEdge } from './RoadNetwork.ts';
 import { angleDifference, approach, yawRate } from './VehicleMotion.ts';
 import { WaterZones } from './WaterZones.ts';
-import { animateVehicle } from './VehicleRig.ts';
+import { animateVehicle, renderVehiclePose } from './VehicleRig.ts';
 import { TrafficSignals } from './TrafficSignals.ts';
 import { vehicleSpec } from './FleetAssets.ts';
 import { Rider } from './Rider.ts';
@@ -45,8 +45,15 @@ interface Agent {
   distanceSquared: number;
   walkSpeed: number;
   footPlant: FootPlant | null;
-  footPlantTime: number;
+  /** Oldingi fizika qadamidagi holat — render ikki qadam orasini chizadi. */
+  previous: Vector3;
+  previousYaw: number;
+  /** Piyodaning yo'lakdan yon tomonga chetlanishi, metr (odamni aylanib o'tish uchun). */
+  sidestep: number;
 }
+
+/** Piyoda odamni aylanib o'tishda shuncha yon tomonga chiqadi, metr. */
+const SIDESTEP = 1.15;
 
 /** Bounded local ambient simulation. Real map lanes, shared assets, independent skeletons. */
 export class Traffic {
@@ -71,8 +78,8 @@ export class Traffic {
   private impactMass = 0;
   private seed = 47021;
   private spawnTimer = 0;
-  private animationTime = 0;
   private readonly water = new WaterZones();
+  private readonly scratch = new Vector3();
   readonly signals: TrafficSignals;
 
   constructor(private physics: Physics, private ground: Ground,
@@ -211,14 +218,14 @@ export class Traffic {
       const rider=!pedestrian&&this.characters.length?new Rider(this.characters[Math.floor(this.random()*this.characters.length)]!):null;
       if(rider){model.object.add(rider.object);rider.pose(spec);}
       let walkSpeed=1.7;model.object.traverse(n=>{if(n.userData.walkSpeed>0)walkSpeed=n.userData.walkSpeed;});
-      this.agents.push({ object: model.object, body, collider, controller, mixer, walkAction, idleAction, blend: 0, pedestrian, edge, distance, animationElapsed:0,distanceSquared:0,walkSpeed,footPlant:pedestrian?new FootPlant(model.object):null,footPlantTime:this.animationTime,
+      this.agents.push({ object: model.object, body, collider, controller, mixer, walkAction, idleAction, blend: 0, pedestrian, edge, distance, animationElapsed:0,distanceSquared:0,walkSpeed,footPlant:pedestrian?new FootPlant(model.object):null,
+        previous: new Vector3(position.x, position.y, position.z), previousYaw: yaw, sidestep: 0,
         speed: 0, cruise: pedestrian ? 1.65 + this.random() * 0.55 : Math.min(spec.maxSpeed*.7,9 + this.random() * 6), vertical: 0, grounded: false, stalled: 0, nextEdge: null, ownedMaterials, steering: 0, yaw, rider });
       return;
     }
   }
 
   update(dt: number, player: PlayerState): void {
-    this.animationTime+=dt;
     this.signals.update(dt,player.position);
     this.hitByPlayer(player);
     for (let i = this.knocked.length - 1; i >= 0; i--) {
@@ -243,6 +250,8 @@ export class Traffic {
 
     for (const agent of this.agents) {
       const location = agent.body.translation();
+      agent.previous.set(location.x, location.y, location.z);
+      agent.previousYaw = agent.yaw;
       agent.distanceSquared=(location.x-player.position.x)**2+(location.z-player.position.z)**2;
       updateModelLOD(agent.object, agent.distanceSquared);
       if(agent.rider)updateModelLOD(agent.rider.object,agent.distanceSquared);
@@ -251,16 +260,35 @@ export class Traffic {
       const dx = (agent.edge.b.x - agent.edge.a.x) / agent.edge.length;
       const dz = (agent.edge.b.z - agent.edge.a.z) / agent.edge.length;
       let targetSpeed = agent.cruise;
-      const obstacles = [player.position, player.carPosition,
-        ...this.agents.filter((other) => other !== agent).map((other) => other.body.translation())];
-      // Brake before people/cars in our lane, including the user's parked car.
-      for (const obstacle of obstacles) {
+      // Odamlar (o'yinchi va boshqa piyodalar) aylanib o'tiladi: yo'lida odam
+      // bo'lsa piyoda to'xtab qolmaydi, yon tomonga chetlanib yonidan o'tadi.
+      // Faqat mashina oldida tormoz beriladi — uni aylanib o'tish uchun joy kam.
+      let avoid = 0, nearestAhead = Infinity;
+      const people: PointXZ[] = player.mode === 'walk' ? [player.position] : [];
+      for (const other of this.agents) if (other !== agent && other.pedestrian) people.push(other.body.translation());
+      for (const obstacle of people) {
         const ox = obstacle.x - t.x, oz = obstacle.z - t.z;
         const ahead = ox * dx + oz * dz;
-        const lateral = Math.abs(ox * dz - oz * dx);
-        const clearance = agent.pedestrian ? 1.2 : 6;
-        if (ahead > 0 && ahead < clearance + agent.speed * 1.5 && lateral < (agent.pedestrian ? 0.8 : 2.3)) {
-          targetSpeed = Math.min(targetSpeed, Math.max(0, (ahead - clearance) / 1.5));
+        if (ahead < -0.6 || ahead > 4.5 || ahead >= nearestAhead) continue;
+        // Yon masofa piyodaning o'zidan, `lanePoint` siljishi tomoni musbat.
+        const lateral = oz * dx - ox * dz;
+        if (Math.abs(lateral) >= SIDESTEP) continue;
+        nearestAhead = ahead;
+        // To'siqdan narigi tomonga. Ro'para kelayotgan ikki piyoda ham bir xil
+        // qo'l tomoniga o'tadi, shuning uchun bir-birini to'sib qolmaydi.
+        const obstacleLane = agent.sidestep + lateral;
+        avoid = obstacleLane + (lateral > 0.05 ? -SIDESTEP : SIDESTEP);
+        avoid = Math.max(-1.5, Math.min(1.5, avoid));
+      }
+      agent.sidestep = approach(agent.sidestep, avoid, avoid ? 1.4 : 0.8, dt);
+      const vehicles: PointXZ[] = [player.carPosition];
+      for (const other of this.agents) if (!other.pedestrian) vehicles.push(other.body.translation());
+      for (const obstacle of vehicles) {
+        const ox = obstacle.x - t.x, oz = obstacle.z - t.z;
+        const ahead = ox * dx + oz * dz;
+        const lateral = Math.abs(oz * dx - ox * dz - agent.sidestep);
+        if (ahead > 0 && ahead < 1.2 + agent.speed * 1.5 && lateral < 0.8) {
+          targetSpeed = Math.min(targetSpeed, Math.max(0, (ahead - 1.2) / 1.5));
         }
       }
       agent.speed += Math.max(-8 * dt, Math.min(2.5 * dt, targetSpeed - agent.speed));
@@ -274,20 +302,21 @@ export class Traffic {
         edge = next;
       }
       const target = lanePoint(edge, nextDistance, agent.pedestrian);
+      const ex = (edge.b.x - edge.a.x) / edge.length, ez = (edge.b.z - edge.a.z) / edge.length;
+      target.x -= ez * agent.sidestep;
+      target.z += ex * agent.sidestep;
       const deltaX = target.x - t.x, deltaZ = target.z - t.z;
       const distance = Math.hypot(deltaX, deltaZ);
-      const travel = Math.min(distance, agent.speed * dt);
+      // Chetlanish paytida yo'l diagonal bo'ladi — ortda qolmaslik uchun biroz tezroq yetib oladi.
+      const travel = Math.min(distance, agent.speed * dt * 1.6);
       if (this.blocked(target)) {
+        // Chetlanish binoga olib borsa, yo'lakka qaytadi.
+        if (agent.sidestep !== 0) { agent.sidestep = approach(agent.sidestep, 0, 3, dt); continue; }
         agent.stalled += dt;
         agent.speed = 0;
         continue;
       }
       agent.vertical = agent.grounded ? -0.8 : Math.max(-40, agent.vertical - 9.81 * dt);
-      const yaw = Math.atan2(deltaX, deltaZ);
-      if (travel > 0.0001) {
-        agent.body.setRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) }, true);
-        agent.object.rotation.y = yaw;
-      }
       agent.controller.computeColliderMovement(agent.collider, {
         x: distance ? deltaX / distance * travel : 0, y: agent.vertical * dt, z: distance ? deltaZ / distance * travel : 0,
       }, undefined, undefined, other=>!other.isSensor());
@@ -295,6 +324,13 @@ export class Traffic {
       agent.grounded = agent.controller.computedGrounded();
       agent.body.setNextKinematicTranslation({ x: t.x + movement.x, y: t.y + movement.y, z: t.z + movement.z });
       const actual = Math.hypot(movement.x, movement.z);
+      // Yuzi haqiqiy harakat tomoniga yumshoq buriladi. Ilgari yo'nalish bir
+      // necha sm oldidagi nuqtadan olinib, har qadamda to'g'ridan-to'g'ri
+      // qo'yilardi — kollayder ozgina surilsa ham gavda titrardi.
+      if (actual > 0.002) {
+        agent.yaw += angleDifference(Math.atan2(movement.x, movement.z), agent.yaw) * (1 - Math.exp(-10 * dt));
+        agent.body.setRotation({ x: 0, y: Math.sin(agent.yaw / 2), z: 0, w: Math.cos(agent.yaw / 2) }, true);
+      }
       if (actual < travel * 0.4 || travel < 0.0001) agent.stalled += dt;
       else agent.stalled = 0;
       // Advance the route only when the collider really follows it (no tunnelling).
@@ -311,8 +347,6 @@ export class Traffic {
         // Qadam uzunligi tezlikka bog'lanadi; turgan holatda turish klipi
         // o'z sur'atida davom etadi, shuning uchun mixer to'xtatilmaydi.
         agent.walkAction?.setEffectiveTimeScale(Math.max(0.05, pace / agent.walkSpeed));
-        agent.animationElapsed+=dt;
-        if(agent.distanceSquared<45*45||agent.animationElapsed>=1/30){agent.mixer.update(agent.animationElapsed);agent.animationElapsed=0;}
       }
     }
   }
@@ -366,9 +400,10 @@ export class Traffic {
     const blocked = this.blocked(destination) || this.water.movementFraction(t, destination, 2.5) < 1;
     agent.vertical = agent.grounded ? -0.8 : Math.max(-40, agent.vertical - 9.81 * dt);
     agent.body.setRotation({ x: 0, y: Math.sin(agent.yaw/2), z: 0, w: Math.cos(agent.yaw/2) }, true);
-    agent.object.rotation.y = agent.yaw;
-    agent.controller.computeColliderMovement(agent.collider, { x: blocked ? 0 : dx, y: agent.vertical * dt, z: blocked ? 0 : dz }, undefined, undefined,
-      other=>!other.isSensor()&&!other.parent()?.isDynamic());
+    agent.controller.computeColliderMovement(agent.collider, { x: blocked ? 0 : dx, y: agent.vertical * dt, z: blocked ? 0 : dz },
+      // Sensor va dinamik (urib yuborilgan) jismlar Rapier bayroqlari bilan chiqariladi:
+      // JS predikati har kollayder uchun WASM chaqiruvi edi va sezilarli vaqt olardi.
+      RAPIER.QueryFilterFlags.EXCLUDE_SENSORS | RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC);
     const movement = agent.controller.computedMovement();
     agent.grounded = agent.controller.computedGrounded();
     agent.body.setNextKinematicTranslation({ x: t.x+movement.x, y: t.y+movement.y, z: t.z+movement.z });
@@ -381,7 +416,7 @@ export class Traffic {
     agent.rider?.pose(vehicleSpec(agent.object),actual,agent.steering,agent.object.userData.pedalPhase);
   }
 
-  render(): void {
+  render(alpha = 1, dt = 0): void {
     for (const { agent, body, lift } of this.knocked) {
       const t = body.translation(), r = body.rotation();
       agent.object.quaternion.set(r.x, r.y, r.z, r.w);
@@ -389,19 +424,29 @@ export class Traffic {
       const offset = new Vector3(0, -lift, 0).applyQuaternion(agent.object.quaternion);
       agent.object.position.set(t.x + offset.x, t.y + offset.y, t.z + offset.z);
     }
+    alpha = Math.max(0, Math.min(1, alpha));
     for (const agent of this.agents) {
-      const t = agent.body.translation();
+      // O'yinchi kabi NPC'lar ham ikki fizika qadami orasida chiziladi. Ilgari
+      // model to'g'ridan-to'g'ri oxirgi qadamga qo'yilardi: kadr 0 yoki 2 qadam
+      // bajarganda odamlar va mashinalar sakrab-sakrab harakatlanardi.
+      const t = this.scratch.copy(agent.previous).lerp(agent.body.translation() as Vector3, alpha);
       agent.object.position.set(t.x, t.y - (agent.pedestrian ? 0.9 : vehicleSpec(agent.object).half.y), t.z);
+      const yaw = agent.previousYaw + angleDifference(agent.yaw, agent.previousYaw) * alpha;
+      agent.object.rotation.y = yaw;
+      if (agent.mixer && dt > 0) {
+        // Animatsiya kadr vaqti bilan yuradi — fizika qadami bilan emas.
+        agent.animationElapsed += dt;
+        if (agent.distanceSquared < 45 * 45 || agent.animationElapsed >= 1 / 30) { agent.mixer.update(agent.animationElapsed); agent.animationElapsed = 0; }
+      }
       if (agent.pedestrian && agent.distanceSquared<40*40) alignCharacterFeet(agent.object, t.y - 0.9);
-      if(agent.footPlantTime!==this.animationTime){
-        if(agent.pedestrian&&agent.grounded&&agent.blend>.8&&agent.distanceSquared<25*25)agent.footPlant?.update(Math.min(.1,this.animationTime-agent.footPlantTime),(x,z)=>this.ground.heightAt(x,z)+.02);
+      if (dt > 0) {
+        if(agent.pedestrian&&agent.grounded&&agent.blend>.8&&agent.distanceSquared<25*25)agent.footPlant?.update(Math.min(.1,dt),(x,z)=>this.ground.heightAt(x,z)+.02);
         else agent.footPlant?.reset();
-        agent.footPlantTime=this.animationTime;
       }
       // Match the visible wheels to a mild road slope; physical hull stays stable.
       if (!agent.pedestrian) {
+        renderVehiclePose(agent.object, alpha, agent.steering, agent.object.userData.pedalPhase ?? 0);
         agent.object.rotation.order = 'YXZ';
-        const yaw = agent.object.rotation.y;
         const dx = Math.sin(yaw) * 1.6, dz = Math.cos(yaw) * 1.6;
         agent.object.rotation.x = -Math.atan2(this.ground.heightAt(t.x + dx, t.z + dz) - this.ground.heightAt(t.x - dx, t.z - dz), 3.2);
         const rx=Math.cos(yaw)*.8, rz=-Math.sin(yaw)*.8;

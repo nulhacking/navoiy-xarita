@@ -153,26 +153,13 @@ export class CityWorld {
     const center = { lat: (south + north) / 2, lon: (west + east) / 2, alt: 0 };
     this.frame = new CityFrame(center);
 
-    const waterRings=await this.osm.waterRings();
-    this.ground = await Ground.load(this.frame, bbox, this.terrain, waterRings);
-    if (this.disposed) return;
-    this.group.add(this.ground.mesh);
-
-    this.physics = await Physics.create();
-    if (this.disposed) return;
-    this.physics.addGround(this.ground);
-
-    // Spawn KO'CHADA bo'lishi kerak. Shahar markazining geometrik nuqtasi
-    // ko'pincha bino ichiga tushadi — u yerda personaj devor bilan qamalib
-    // qoladi va joyidan qimirlay olmaydi. Shuning uchun markazga eng yaqin
-    // haqiqiy yo'l nuqtasini topamiz.
-    const center3 = this.frame.toLocal({ ...center, alt: 0 });
-    const spawn = (await this.findRoadSpawn(center3, true)) ?? center3;
-    spawn.y = this.ground.heightAt(spawn.x, spawn.z);
-
-    // Modellar parallel yuklanadi. Biror biri kelmasa — o'yin baribir
-    // ishlaydi, faqat oddiy shakl bilan.
-    const [character, vehicle, pedestrians, signalData, fleet] = await Promise.all([
+    // Modellar, fizika WASM va svetoforlar relyefga bog'liq emas — ular relyef
+    // hisoblanishini kutmasdan DARHOL yuklana boshlaydi. Ilgari hammasi
+    // ketma-ket edi: sekin internetda 10 MB model relyef tayyor bo'lguncha
+    // yuklanishni boshlamasdi. Biror model kelmasa — o'yin baribir ishlaydi,
+    // faqat oddiy shakl bilan (har bir `catch` darhol ulangan).
+    const physicsJob = Physics.create();
+    const assetsJob = Promise.all([
       loadCharacter().catch((error: unknown) => {
         this.onError?.(`Personaj modeli yuklanmadi: ${(error as Error).message}`);
         return null;
@@ -190,6 +177,25 @@ export class CityWorld {
       loadTreeAssets().catch((error:unknown)=>{this.onError?.(`Daraxt modellari: ${(error as Error).message}`);}),
       loadCityProps().catch((error:unknown)=>{this.onError?.(`Ko‘cha modellari: ${(error as Error).message}`);}),
     ]);
+
+    const waterRings=await this.osm.waterRings();
+    this.ground = await Ground.load(this.frame, bbox, this.terrain, waterRings);
+    if (this.disposed) return;
+    this.group.add(this.ground.mesh);
+
+    this.physics = await physicsJob;
+    if (this.disposed) return;
+    this.physics.addGround(this.ground);
+
+    // Spawn KO'CHADA bo'lishi kerak. Shahar markazining geometrik nuqtasi
+    // ko'pincha bino ichiga tushadi — u yerda personaj devor bilan qamalib
+    // qoladi va joyidan qimirlay olmaydi. Shuning uchun markazga eng yaqin
+    // haqiqiy yo'l nuqtasini topamiz.
+    const center3 = this.frame.toLocal({ ...center, alt: 0 });
+    const spawn = (await this.findRoadSpawn(center3, true)) ?? center3;
+    spawn.y = this.ground.heightAt(spawn.x, spawn.z);
+
+    const [character, vehicle, pedestrians, signalData, fleet] = await assetsJob;
     if (this.disposed) return;
 
     this.traffic = new Traffic(this.physics, this.ground, [...(character ? [character] : []), ...pedestrians], vehicle,
@@ -225,7 +231,10 @@ export class CityWorld {
 
     // Birinchi kadrdan oldin o'yinchi atrofidagi tayllar tayyor bo'lsin —
     // aks holda u bo'sh relyefda paydo bo'ladi va binolar keyin "otilib" chiqadi.
-    await this.select(true);
+    // Faqat o'yinchi turgan tayl kutiladi; qo'shnilari o'yin boshlangach
+    // kadrma-kadr quriladi (`scheduleBuild`). Har tayl ~0.25 s CPU oladi,
+    // ya'ni 9 tasini kutish yuklanishga ~2 s qo'shardi.
+    await this.select(true, undefined, true);
     // A small selection near the starting street makes every transport type discoverable.
     for(let i=0;i<fleet.length;i++) {
       const nearby=await this.findRoadSpawn(new Vector3(spawn.x+18+i*14,0,spawn.z+12),false);
@@ -267,6 +276,7 @@ export class CityWorld {
     } finally { this.engine.start(); }
     if (this.disposed) return;
     this.ready = true;
+    this.markStarted();
   }
 
   get isReady(): boolean {
@@ -283,8 +293,9 @@ export class CityWorld {
         this.player!.absorbImpact(this.traffic?.takeImpact() ?? 0);
       });
     }
-    this.player.render(this.paused||this.teleporting?1:this.physics.interpolationAlpha,ctx.dt);
-    this.traffic?.render();
+    const alpha = this.paused || this.teleporting ? 1 : this.physics.interpolationAlpha;
+    this.player.render(alpha,ctx.dt);
+    this.traffic?.render(alpha, this.paused ? 0 : ctx.dt);
     this.breakables?.update(this.paused ? 0 : ctx.dt);
 
     // Quyosh o'yinchi bilan birga ko'chadi. Yo'naltirilgan chiroqning o'zi
@@ -425,8 +436,14 @@ export class CityWorld {
     for (const tile of this.tiles.values()) yield tile.map;
   }
 
-  /** O'yinchi atrofidagi tayllarni yuklaydi va keraksizlarini bo'shatadi. */
-  private async select(waitForAll: boolean, target?: Vector3): Promise<void> {
+  /**
+   * O'yinchi atrofidagi tayllarni yuklaydi va keraksizlarini bo'shatadi.
+   *
+   * @param waitForAll Tayllar qurilguncha kutish (yuklanish, teleport).
+   * @param centerFirst `waitForAll` bilan: faqat markaziy tayl kutiladi,
+   *   qolganlari fonda — o'yin boshlangach — quriladi.
+   */
+  private async select(waitForAll: boolean, target?: Vector3, centerFirst = false): Promise<void> {
     const zoom = this.osm.zoom;
     if (zoom === null || !this.frame || !this.player) return;
 
@@ -444,12 +461,13 @@ export class CityWorld {
         if (!this.osm.has(coord)) continue;
         const key = tileKey(coord);
         wanted.add(key);
+        const awaited = waitForAll && (!centerFirst || (dx === 0 && dy === 0));
         if (!this.tiles.has(key) && !this.loading.has(key)) {
           this.loading.add(key);
-          const job = this.loadTile(key, coord);
+          const job = this.loadTile(key, coord, !awaited);
           this.loadJobs.set(key, job);
-          jobs.push(job);
-        } else if (this.loadJobs.has(key)) {
+          if (awaited) jobs.push(job);
+        } else if (awaited && this.loadJobs.has(key)) {
           jobs.push(this.loadJobs.get(key)!);
         }
       }
@@ -473,7 +491,9 @@ export class CityWorld {
     }
 
     this.updatePhysicsTiles(center, zoom);
-    if (this.mapsDirty) {
+    // Yo'l tarmog'i barcha tayllardan qayta quriladi — fon tayllari birma-bir
+    // qo'shilayotganda har safar emas, navbat bo'shagach bir marta.
+    if (this.mapsDirty && this.backgroundBuilds === 0) {
       this.traffic?.setMaps(this.mapTiles());
       this.mapsDirty = false;
     }
@@ -549,21 +569,61 @@ export class CityWorld {
     this.frame!.toLocal({ lat, lon, alt: 0 }, out);
   }
 
-  private async loadTile(key: string, coord: TileCoord): Promise<void> {
+  /** Fon tayllari navbati: bir vaqtda faqat bittasi quriladi. */
+  private buildChain: Promise<void> = Promise.resolve();
+  private backgroundBuilds = 0;
+  private markStarted: () => void = () => {};
+  /** O'yin boshlanganda (`ready`) yechiladi — fon tayllari yuklanishni sekinlashtirmaydi. */
+  private readonly started = new Promise<void>((resolve) => { this.markStarted = resolve; });
+
+  /**
+   * @param deferred Fon tayli: o'yin boshlanishini kutadi, navbat bilan
+   *   quriladi. Qurish bosqichlari orasida kadr beriladi, shaderlar esa sahnaga
+   *   qo'shilishdan oldin parallel kompilyatsiya qilinadi. Aks holda bir
+   *   nechta tayl ketma-ket qurilib, o'yin boshida bir-ikki soniya qotib qolardi.
+   */
+  private async loadTile(key: string, coord: TileCoord, deferred = false): Promise<void> {
     try {
       const data = await this.osm.get(coord);
-      if (this.disposed || !this.wantedTiles.has(key) || !data || !this.frame || !this.ground) return;
+      if (!data) return;
+      if (deferred) {
+        this.backgroundBuilds++;
+        const job = this.buildChain.then(() => this.started).then(() => this.buildInBackground(key, coord, data))
+          .finally(() => { this.backgroundBuilds--; });
+        this.buildChain = job.catch(() => {});
+        await job;
+        return;
+      }
+      if (this.disposed || !this.wantedTiles.has(key) || !this.frame || !this.ground) return;
       const tile = new CityTile(coord, data, this.frame, this.ground);
       liteMaterials(tile.group, true);
-      this.tiles.set(key, tile);
-      this.group.add(tile.group);
-      this.mapsDirty = true;
+      this.addTile(key, tile);
     } catch (error) {
       this.onError?.(`${key}: ${(error as Error).message}`);
     } finally {
       this.loading.delete(key);
       this.loadJobs.delete(key);
     }
+  }
+
+  private async buildInBackground(key: string, coord: TileCoord, data: NonNullable<Awaited<ReturnType<OsmSource['get']>>>): Promise<void> {
+    const alive = () => !this.disposed && this.wantedTiles.has(key);
+    await nextFrame();
+    if (!alive() || !this.frame || !this.ground) return;
+    const tile = new CityTile(coord, data, this.frame, this.ground, true);
+    await tile.buildInSteps(nextFrame, alive);
+    if (!alive()) { tile.dispose(); return; }
+    liteMaterials(tile.group, true);
+    const { renderer, camera, scene } = this.engine;
+    await renderer.compileAsync(tile.group, camera, scene).catch(() => {});
+    if (!alive()) { tile.dispose(); return; }
+    this.addTile(key, tile);
+  }
+
+  private addTile(key: string, tile: CityTile): void {
+    this.tiles.set(key, tile);
+    this.group.add(tile.group);
+    this.mapsDirty = true;
   }
 
   /**
@@ -639,4 +699,9 @@ export class CityWorld {
     scene.background = null;
     this.sky.dispose();
   }
+}
+
+/** Keyingi kadrgacha kutadi — orada o'yin bir kadr chizadi. */
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
